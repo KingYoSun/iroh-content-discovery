@@ -125,7 +125,7 @@ mod tests {
         for addresses in [
             vec![],
             vec![
-                "203.0.113.1:11223".parse().unwrap(),
+                "203.0.113.1:60125".parse().unwrap(),
                 "198.51.100.2:33445".parse().unwrap(),
             ],
         ] {
@@ -162,11 +162,11 @@ mod tests {
         let bytes = packet(&[
             (&subdomain, "203.0.113.2:22"),
             ("other", "not a socket"),
-            (&owner, "203.0.113.1:11223"),
+            (&owner, "203.0.113.1:60125"),
         ]);
         assert_eq!(
             ServerList::decode(&bytes, &KEY).unwrap().addresses(),
-            &["203.0.113.1:11223".parse::<SocketAddrV4>().unwrap()]
+            &["203.0.113.1:60125".parse::<SocketAddrV4>().unwrap()]
         );
     }
 

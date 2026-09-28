@@ -55,7 +55,7 @@ Links from this mode work only through this demo's gateway.
 ## Standalone gateway
 
 ```sh
-cargo run -p iroh-local-gateway -- --listen 127.0.0.1:45475 --index-server 127.0.0.1:11223
+cargo run -p iroh-local-gateway -- --listen 127.0.0.1:45475 --index-server 127.0.0.1:60125
 ```
 
 Open:

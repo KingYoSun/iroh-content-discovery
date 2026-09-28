@@ -195,10 +195,10 @@ mod tests {
         .discovery_config();
         assert_eq!(both.public_key, Some([42; 32]));
         assert_eq!(both.rendezvous_hash, Some([1; 20]));
-        let direct = parse(vec!["gateway", "--index-server", "127.0.0.1:11223"])
+        let direct = parse(vec!["gateway", "--index-server", "127.0.0.1:60125"])
             .unwrap()
             .discovery_config();
-        assert_eq!(direct.server, Some("127.0.0.1:11223".parse().unwrap()));
+        assert_eq!(direct.server, Some("127.0.0.1:60125".parse().unwrap()));
         assert!(direct.rendezvous_hash.is_none());
     }
 

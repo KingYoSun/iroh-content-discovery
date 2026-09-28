@@ -6,7 +6,7 @@ After=network-online.target
 [Service]
 Type=simple
 DynamicUser=yes
-ExecStart=/usr/local/bin/udp-addr-index --dht-port 11223 --rendezvous-hash b86c3d910e1a67ec9ba8a69a95bd7f8b08be923b
+ExecStart=/usr/local/bin/udp-addr-index --dht-port 60125 --rendezvous-hash b86c3d910e1a67ec9ba8a69a95bd7f8b08be923b
 Environment=RUST_LOG=info,udp_addr_index=debug
 Restart=on-failure
 RestartSec=5s

@@ -1,7 +1,7 @@
 # Run the indexer with systemd
 
 This system service starts at boot, survives SSH logout, and restarts after a
-failure. It runs as an unprivileged dynamic user, listens on UDP port **11223**,
+failure. It runs as an unprivileged dynamic user, listens on UDP port **60125**,
 and advertises itself using the protocol's public Mainline rendezvous hash.
 No user account or writable state directory needs to be created.
 
@@ -16,10 +16,19 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now udp-addr-index.service
 ```
 
-Allow inbound UDP **11223** in the server firewall and any hosting-provider
+Allow inbound UDP **60125** in the server firewall and any hosting-provider
 firewall. Mainline also needs outbound UDP to arbitrary peer ports and working
-DNS. The service binds all IPv4 interfaces. If behind NAT, forward UDP 11223 to
+DNS. The service binds all IPv4 interfaces. If behind NAT, forward UDP 60125 to
 the server. A running service alone does not establish public reachability.
+
+Port 60125 lies in Linux's default ephemeral range, so another process could
+briefly hold it as an outgoing source port when the service starts. To rule
+that out, reserve it:
+
+```sh
+echo 'net.ipv4.ip_local_reserved_ports = 60125' | sudo tee /etc/sysctl.d/90-udp-addr-index.conf
+sudo sysctl --system
+```
 
 ## Status and logs
 

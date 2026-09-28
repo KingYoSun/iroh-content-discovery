@@ -65,7 +65,7 @@ The repository contains four Rust workspace crates and a browser extension:
   Chrome, Brave and Firefox
 
 ```sh
-cargo run -p udp-addr-index --features cli -- --dht-port 11223 \
+cargo run -p udp-addr-index --features cli -- --dht-port 60125 \
   --rendezvous-hash b86c3d910e1a67ec9ba8a69a95bd7f8b08be923b
 cargo run -p iroh-mainline-endpoint-discovery --example blobs
 cargo run -p iroh-mainline-endpoint-discovery --example spoof
@@ -105,7 +105,7 @@ port, renews every ten minutes, and retries after thirty seconds on failure.
 `None` serves without announcing at all. The CLI announces only when you pass
 `--rendezvous-hash HEX`: use the hash above for default discovery, and omit the
 flag when clients reach you through an explicit address or a signed list. The
-CLI binds all IPv4 interfaces at `--dht-port`, 11223 by default, so allow
+CLI binds all IPv4 interfaces at `--dht-port`, 60125 by default, so allow
 inbound UDP there. Mainline can choose the port but not the interface.
 
 `AddrIndex::discover(dht)` finds servers with `get_peers` and then uses the same
@@ -168,7 +168,7 @@ To publish with **iroh-share**, create a standalone name, open its advanced DNS
 record editor, and replace its records with:
 
 ```dns
-@ 300 IN TXT "203.0.113.1:11223"
+@ 300 IN TXT "203.0.113.1:60125"
 @ 300 IN TXT "198.51.100.2:33445"
 ```
 
@@ -239,7 +239,7 @@ Query flags:
 - `?sizes` adds file sizes to a listing.
 
 ```sh
-cargo run -p iroh-local-gateway -- --index-server 127.0.0.1:11223
+cargo run -p iroh-local-gateway -- --index-server 127.0.0.1:60125
 ```
 
 To serve content, the `provide` example adds a file or directory as blobs plus

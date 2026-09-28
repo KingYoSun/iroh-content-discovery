@@ -281,7 +281,7 @@ mod tests {
         let owner = crate::pkarr_name(&public);
         // The same apex TXT records entered in iroh-share's DNS editor.
         let mut packet = Packet::new_reply(0);
-        for socket in ["203.0.113.1:11223", "198.51.100.2:33445"] {
+        for socket in ["203.0.113.1:60125", "198.51.100.2:33445"] {
             packet.answers.push(ResourceRecord::new(
                 owner.as_str().try_into().unwrap(),
                 CLASS::IN,
@@ -313,7 +313,7 @@ mod tests {
                 .unwrap()
                 .addresses(),
             &[
-                "203.0.113.1:11223".parse::<SocketAddrV4>().unwrap(),
+                "203.0.113.1:60125".parse::<SocketAddrV4>().unwrap(),
                 "198.51.100.2:33445".parse().unwrap(),
             ]
         );
@@ -326,7 +326,7 @@ mod tests {
         assert!(matches!(result, Err(UdpError::NoServers { .. })));
         // The failed configuration did not consume the socket's datagram hook.
         assert!(
-            AddrIndex::udp(dht, "127.0.0.1:11223".parse().unwrap())
+            AddrIndex::udp(dht, "127.0.0.1:60125".parse().unwrap())
                 .await
                 .is_ok()
         );
@@ -353,7 +353,7 @@ mod tests {
             .unwrap();
         let hash = [45; 20];
         authority
-            .announce_peer(hash.into(), Some(11223))
+            .announce_peer(hash.into(), Some(60125))
             .await
             .unwrap();
         let index = AddrIndex::discover_with_config(
