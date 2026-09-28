@@ -1795,6 +1795,7 @@ dependencies = [
  "tracing-subscriber",
  "udp-addr-index",
  "udp-addr-index-proto",
+ "windows-sys 0.61.2",
  "z32",
 ]
 

@@ -107,6 +107,29 @@ async fn start(state: &Path) -> Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::{
+            Foundation::{HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation},
+            System::Console::{
+                GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+            },
+        };
+        // Redirecting the child's stdio does not stop Windows from also
+        // inheriting our original pipe handles. That would keep callers waiting
+        // for EOF until the background gateway exits.
+        for stream in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            // SAFETY: These are borrowed process standard handles. We only clear
+            // their inheritance flag; we neither close nor replace them.
+            unsafe {
+                let handle = GetStdHandle(stream);
+                if !handle.is_null()
+                    && handle != INVALID_HANDLE_VALUE
+                    && SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) == 0
+                {
+                    return Err(std::io::Error::last_os_error())
+                        .context("cannot disable launcher stdio inheritance");
+                }
+            }
+        }
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
     let mut child = command.spawn().context("cannot start gateway")?;

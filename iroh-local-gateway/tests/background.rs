@@ -4,6 +4,8 @@ use std::{
     net::TcpListener,
     path::{Path, PathBuf},
     process::Command,
+    sync::mpsc,
+    time::Duration,
 };
 
 const HELPER: &str = env!("CARGO_BIN_EXE_iroh-gateway-background");
@@ -14,11 +16,23 @@ impl Drop for StopOnDrop {
     }
 }
 fn helper(state: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(HELPER)
-        .arg("--state-dir")
-        .arg(state)
-        .args(args)
-        .output()
+    let mut command = Command::new(HELPER);
+    command.arg("--state-dir").arg(state).args(args);
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        // Keep capturing pipes: returning before the daemon exits is part of
+        // the launcher's contract, including on Windows.
+        let _ = sender.send(command.output());
+    });
+    receiver
+        .recv_timeout(Duration::from_secs(45))
+        .unwrap_or_else(|error| {
+            panic!(
+                "helper {args:?} did not finish: {error}\nlauncher: {}\ngateway: {}",
+                fs::read_to_string(state.join("launcher.log")).unwrap_or_default(),
+                fs::read_to_string(state.join("gateway.log")).unwrap_or_default(),
+            )
+        })
         .unwrap()
 }
 fn require_success(state: &Path, args: &[&str]) {
