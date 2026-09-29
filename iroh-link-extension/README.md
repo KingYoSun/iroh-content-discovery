@@ -7,9 +7,9 @@ web server:
 
 ```text
 https://<z32>.blake3.net/path/to/file
-    -> http://<z32>.blake3.localhost:8080/path/to/file
+    -> http://<z32>.blake3.localhost:45475/path/to/file
 https://<public-key>.pkarr.net/path/to/file?x=1
-    -> http://<public-key>.pkarr.localhost:8080/path/to/file?x=1
+    -> http://<public-key>.pkarr.localhost:45475/path/to/file?x=1
 ```
 
 The hash is a 52-character lowercase z-base-32 encoded BLAKE3 digest, and the
@@ -20,8 +20,9 @@ at the bare URL. Query strings and paths are retained. The apexes
 `https://blake3.net/` and `https://pkarr.net/` stay untouched so they can
 host instructions or an extension download page. Other hosts, nested
 subdomains, and localhost requests are not matched.
-The extension captures a single alphanumeric label; the gateway validates its
-length, alphabet, and canonical encoding, returning 400 for invalid hashes.
+The extension forwards every single-label subdomain, including malformed hashes
+and keys. The gateway validates the label's length, alphabet, and canonical
+encoding, returning 400 for invalid hashes.
 
 Pkarr links use a z-base-32 public key in the subdomain. The gateway verifies
 the signed DNS packet and redirects to its HTTPS target, preserving the path
@@ -35,12 +36,12 @@ The gateway validates public keys. Both domains use the same port and enable swi
 2. Enable **Developer mode**.
 3. Click **Load unpacked**, then choose this `iroh-link-extension` directory
    (the directory containing `manifest.json`). No build step is required.
-4. Open the extension popup, set the gateway port (default **8080**), leave
+4. Open the extension popup, set the gateway port (default **45475**), leave
    local redirects enabled, and click **Save**.
 5. Start the gateway and open a content link:
 
    ```sh
-   cargo run -p iroh-local-gateway -- --index-server 127.0.0.1:11223
+   cargo run -p iroh-local-gateway -- --index-server 127.0.0.1:60125
    ```
 
 Use your own index server address, or the gateway's key and infohash discovery

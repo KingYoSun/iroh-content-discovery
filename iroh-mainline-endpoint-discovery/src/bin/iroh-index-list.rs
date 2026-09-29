@@ -6,21 +6,24 @@ use iroh_mainline_endpoint_discovery::{ServerList, republish_server_list};
 use n0_error::{Result, StdResultExt};
 use n0_mainline::{Dht, MutableItem, SigningKey};
 use std::net::SocketAddrV4;
+use tracing::info;
 use zeroize::Zeroizing;
 
 const SECRET_ENV: &str = "IROH_INDEX_LIST_SECRET";
 
 #[derive(Parser)]
 #[command(
-    about = "Publish and renew a BEP44 server list; reads IROH_INDEX_LIST_SECRET (64 hex digits)"
+    about = "Publish and renew a Pkarr TXT server list; reads IROH_INDEX_LIST_SECRET (64 hex digits)"
 )]
 struct Cli {
-    /// Public index server sockets (at most two). Omit to publish an empty list.
+    /// Public index server sockets (at most two).
+    ///
+    /// Omit to publish an empty list.
     #[arg(long, num_args = 1..=2)]
     server: Vec<SocketAddrV4>,
-    /// Nonnegative BEP44 sequence; increase whenever the list changes.
+    /// Pkarr timestamp in Unix microseconds (defaults to now); increase for each update.
     #[arg(long)]
-    sequence: i64,
+    sequence: Option<i64>,
     /// Local Mainline UDP port; zero selects an available port.
     #[arg(long, default_value_t = 0)]
     dht_port: u16,
@@ -42,12 +45,8 @@ fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
-    let public_key = item
-        .key()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
-    tracing::info!(%public_key, sequence = item.seq(), "starting index-list republisher");
+    let public_key = z32::encode(item.key());
+    info!(%public_key, sequence = item.seq(), "starting index-list republisher");
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -74,7 +73,16 @@ fn sign(cli: &Cli, secret: &[u8]) -> Result<MutableItem> {
     let bytes = Zeroizing::new(<[u8; 32]>::try_from(decoded.as_slice()).anyerr()?);
     let key = SigningKey::from_bytes(&bytes);
     // SigningKey zeroizes its secret on drop; the decoded buffer is Zeroizing.
-    ServerList::new(cli.server.clone())?.sign(&key, cli.sequence)
+    let sequence = match cli.sequence {
+        Some(sequence) => sequence,
+        None => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .anyerr()?
+            .as_micros()
+            .try_into()
+            .anyerr()?,
+    };
+    ServerList::new(cli.server.clone())?.sign(&key, sequence)
 }
 
 #[cfg(test)]
@@ -85,7 +93,7 @@ mod tests {
     fn secret_is_hex_and_signs_expected_list() {
         let cli = Cli {
             server: vec!["203.0.113.1:1234".parse().unwrap()],
-            sequence: 7,
+            sequence: Some(7),
             dht_port: 0,
         };
         let item = sign(&cli, &[b'0'; 64]).unwrap();
@@ -95,7 +103,9 @@ mod tests {
         );
         assert_eq!(item.seq(), 7);
         assert_eq!(
-            ServerList::decode(item.value()).unwrap().addresses(),
+            ServerList::decode(item.value(), item.key())
+                .unwrap()
+                .addresses(),
             cli.server
         );
         assert!(sign(&cli, &[b'x'; 64]).is_err());

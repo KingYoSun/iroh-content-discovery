@@ -1,4 +1,4 @@
-//! Publish and resolve iroh endpoints through the Mainline DHT.
+//! Publishes and resolves iroh endpoints through the Mainline DHT.
 //!
 //! Mainline maps an application-defined infohash to a compact IPv4 socket.
 //! An iroh address-index server then maps that socket to a signed endpoint
@@ -10,6 +10,8 @@
 use data_encoding::{HEXLOWER, HEXLOWER_PERMISSIVE};
 
 mod addr_index;
+mod index_keeper;
+mod lookup_cache;
 mod pkarr;
 mod publisher;
 mod record;
@@ -18,24 +20,29 @@ mod resolver;
 mod server_list;
 mod udp;
 
-pub use addr_index::{AddrIndex, AddrIndexError, DiscoveryConfig};
+pub use addr_index::{
+    AddrIndex, AddrIndexBuilder, AddrIndexError, DEFAULT_INDEX_LIST_KEY, DEFAULT_LOOKUP_CACHE_TTL,
+};
 pub use blake3::Hash;
-pub use pkarr::{BLAKE3_DOMAIN, PKARR_DOMAIN, PKARR_REFRESH, PkarrPublisher, pkarr_name};
-pub use publisher::{ANNOUNCE_SPACING, Publisher, REFRESH};
+pub use pkarr::{
+    BLAKE3_DOMAIN, PKARR_DOMAIN, PKARR_REFRESH, PkarrPublisher, decode_signed_packet,
+    encode_signed_packet, is_hostname, pkarr_name,
+};
+pub use publisher::{ANNOUNCE_SPACING, INDEX_REFRESH, Publisher, REFRESH, RETRY};
 pub use record::{RecordPayload, RecordPayloadV1, SignedRecord};
 pub use republisher::republish_server_list;
 pub use resolver::Resolver;
-pub use server_list::{SERVER_LIST_SALT, ServerList};
+pub use server_list::ServerList;
 pub use udp::{DEFAULT_TIMEOUT, ResolveResult, UdpClient, UdpError};
 
-/// Mainline infohash for a BLAKE3 hash: `SHA-1(blake3)`.
+/// Returns the Mainline infohash for a BLAKE3 hash, `SHA-1(blake3)`.
 pub fn infohash_from_blake3(hash: &Hash) -> [u8; 20] {
     sha1_smol::Sha1::from(hash.as_bytes().as_slice())
         .digest()
         .bytes()
 }
 
-/// Parse a 40-character infohash or a 64-character BLAKE3 hash.
+/// Parses a 40-character infohash or a 64-character BLAKE3 hash.
 pub fn parse_infohash(value: &str) -> Result<[u8; 20], HashParseError> {
     let value = value.trim();
     match value.len() {
@@ -48,7 +55,7 @@ pub fn parse_infohash(value: &str) -> Result<[u8; 20], HashParseError> {
     }
 }
 
-/// Format a 20-byte infohash as lowercase hexadecimal.
+/// Formats a 20-byte infohash as lowercase hexadecimal.
 pub fn infohash_hex(id: &[u8; 20]) -> String {
     HEXLOWER.encode(id)
 }

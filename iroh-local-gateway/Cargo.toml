@@ -7,19 +7,51 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 readme = "README.md"
+default-run = "iroh-local-gateway"
+
+[features]
+default = ["cli"]
+# The command line gateway. Library consumers can switch it off with
+# `default-features = false`.
+cli = ["dep:clap", "dep:data-encoding", "dep:tracing-subscriber", "dep:dirs", "dep:serde_json", "dep:plist", "dep:windows-sys"]
+
+[[bin]]
+name = "iroh-local-gateway"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "iroh-gateway-background"
+path = "src/bin/iroh-gateway-background.rs"
+required-features = ["cli"]
+
+[[test]]
+name = "background"
+required-features = ["cli"]
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"
+required-features = ["cli"]
+
+[[example]]
+name = "pkarr-publish"
+path = "examples/pkarr-publish.rs"
+required-features = ["cli"]
 
 [dependencies]
+dirs = { version = "6", optional = true }
+serde_json = { version = "1", optional = true }
 async-stream = "0.3"
 axum = "0.8"
 bao-tree = "0.16"
 blake3.workspace = true
 bytes = "1"
-clap.workspace = true
-data-encoding.workspace = true
+clap = { workspace = true, optional = true }
+data-encoding = { workspace = true, optional = true }
 iroh.workspace = true
 iroh-blobs.workspace = true
 iroh-mainline-endpoint-discovery = { version = "0.1.0", path = "../iroh-mainline-endpoint-discovery" }
-udp-addr-index-proto = { version = "0.1.0", path = "../udp-addr-index-proto" }
 lru = "0.18"
 mime_classifier = "0.0.1"
 mime_guess = "2"
@@ -33,8 +65,14 @@ rand.workspace = true
 tokio.workspace = true
 tower-http = { version = "0.6", features = ["cors"] }
 tracing.workspace = true
-tracing-subscriber.workspace = true
+tracing-subscriber = { workspace = true, optional = true }
 z32 = "1.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = { version = "1", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", optional = true, features = ["Win32_Foundation", "Win32_System_Console"] }
 
 [dev-dependencies]
 tempfile = "3"

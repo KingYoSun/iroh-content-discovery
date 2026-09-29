@@ -19,7 +19,7 @@ use udp_addr_index::{Limits, Server};
 )]
 struct Cli {
     /// Local Mainline UDP port, shared with the address index (binds all IPv4 interfaces).
-    #[arg(long, default_value_t = 11223)]
+    #[arg(long, default_value_t = 60125)]
     dht_port: u16,
     /// Maximum opaque value length.
     #[arg(long, default_value_t = udp_addr_index_proto::MAX_VALUE_LEN)]

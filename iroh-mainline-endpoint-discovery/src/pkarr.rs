@@ -1,4 +1,4 @@
-//! Publish signed Pkarr names and keep them alive on Mainline.
+//! Publishes signed Pkarr names and keeps them alive on Mainline.
 
 use std::{
     collections::HashMap,
@@ -15,6 +15,9 @@ use simple_dns::{
 };
 use tokio::sync::{Notify, watch};
 
+use crate::RETRY;
+use tracing::{debug, warn};
+
 /// How often each packet is republished.
 ///
 /// Mainline drops records that are not refreshed, so the publisher has to stay
@@ -27,15 +30,48 @@ pub const BLAKE3_DOMAIN: &str = "blake3.net";
 /// Domain under which a Pkarr public key names content.
 pub const PKARR_DOMAIN: &str = "pkarr.net";
 
-/// Time to wait before retrying after a failed publish.
-const RETRY: Duration = Duration::from_secs(30);
-
 /// Time to live of published records, in seconds.
 const TTL: u32 = 300;
 
-/// The name a public key is published under, in z-base-32.
+/// Returns the name a public key is published under, in z-base-32.
 pub fn pkarr_name(public_key: &[u8; 32]) -> String {
     z32::encode(public_key)
+}
+
+/// Encodes an item as a Pkarr signed packet.
+///
+/// The layout is `key (32) ‖ signature (64) ‖ seq (u64 big endian) ‖ value`,
+/// as used by Pkarr relays. Returns `None` for items Pkarr cannot express: a
+/// salted item or a negative sequence.
+pub fn encode_signed_packet(item: &MutableItem) -> Option<Vec<u8>> {
+    if item.salt().is_some() {
+        return None;
+    }
+    let seq = u64::try_from(item.seq()).ok()?;
+    let mut bytes = Vec::with_capacity(104 + item.value().len());
+    bytes.extend_from_slice(item.key());
+    bytes.extend_from_slice(item.signature());
+    bytes.extend_from_slice(&seq.to_be_bytes());
+    bytes.extend_from_slice(item.value());
+    Some(bytes)
+}
+
+/// Decodes a Pkarr signed packet, returning `None` unless its signature verifies.
+pub fn decode_signed_packet(bytes: &[u8]) -> Option<MutableItem> {
+    let (key, rest) = bytes.split_first_chunk::<32>()?;
+    let (signature, rest) = rest.split_first_chunk::<64>()?;
+    let (seq, value) = rest.split_first_chunk::<8>()?;
+    let seq = i64::try_from(u64::from_be_bytes(*seq)).ok()?;
+    // BEP 44 signs the bencoded sequence and value, and Pkarr never salts.
+    let mut signable = format!("3:seqi{seq}e1:v{}:", value.len()).into_bytes();
+    signable.extend_from_slice(value);
+    iroh_base::PublicKey::from_bytes(key)
+        .ok()?
+        .verify(&signable, &iroh_base::Signature::from_bytes(signature))
+        .ok()?;
+    Some(MutableItem::new_signed_unchecked(
+        *key, *signature, value, seq, None,
+    ))
 }
 
 /// Publishes signed Pkarr packets and republishes them until dropped.
@@ -74,8 +110,9 @@ struct State {
     generation: Mutex<u64>,
     /// The newest generation that has been published successfully.
     published: watch::Sender<u64>,
-    /// Held while publishing, so two rounds cannot race for a key. Mainline
-    /// rejects a write whose sequence is not the newest it has seen.
+    /// Held while publishing, so two rounds cannot race for a key.
+    ///
+    /// Mainline rejects a write whose sequence is not the newest it has seen.
     publishing: tokio::sync::Mutex<i64>,
 }
 
@@ -86,7 +123,7 @@ struct Entry {
 }
 
 impl PkarrPublisher {
-    /// Start a publisher on `dht`, with no names yet.
+    /// Starts a publisher on `dht`, with no names yet.
     pub fn new(dht: Dht) -> Self {
         let state = Arc::new(State {
             dht,
@@ -106,7 +143,7 @@ impl PkarrPublisher {
         }
     }
 
-    /// Publish an `HTTPS` record under `key`, pointing at `target`.
+    /// Publishes an `HTTPS` record under `key`, pointing at `target`.
     ///
     /// `name` is the label inside the key's zone; an empty label is the apex,
     /// which is what resolvers look up for the bare name. `target` is a
@@ -136,7 +173,7 @@ impl PkarrPublisher {
         self.set_raw(key, &packet)
     }
 
-    /// Publish `hash` under `key`, as an apex `HTTPS` record on [`BLAKE3_DOMAIN`].
+    /// Publishes `hash` under `key`, as an apex `HTTPS` record on [`BLAKE3_DOMAIN`].
     ///
     /// The key then names content that a gateway serves directly, and the
     /// name survives the content changing.
@@ -148,7 +185,7 @@ impl PkarrPublisher {
         self.set_https(key, "", &format!("{}.{BLAKE3_DOMAIN}", z32::encode(hash)))
     }
 
-    /// Publish `packet` under `key`, replacing anything set for it.
+    /// Publishes `packet` under `key`, replacing anything set for it.
     ///
     /// Record names are not checked; resolvers only read records named for
     /// the key's own zone.
@@ -175,7 +212,7 @@ impl PkarrPublisher {
         Ok(())
     }
 
-    /// Stop publishing the name of `public_key`.
+    /// Stops publishing the name of `public_key`.
     ///
     /// The DHT keeps serving it until the record expires.
     pub fn remove(&self, public_key: &[u8; 32]) -> bool {
@@ -192,7 +229,7 @@ impl PkarrPublisher {
         removed
     }
 
-    /// Wait until everything set so far has been published at least once.
+    /// Waits until everything set so far has been published at least once.
     ///
     /// Names set after this call may still be unpublished when it returns.
     pub async fn wait_published(&self) {
@@ -205,7 +242,7 @@ impl PkarrPublisher {
         }
     }
 
-    /// Publish every name now, instead of waiting for the background task.
+    /// Publishes every name now, instead of waiting for the background task.
     ///
     /// # Errors
     ///
@@ -217,13 +254,13 @@ impl PkarrPublisher {
 }
 
 impl State {
-    /// Publish every name, then wait for a change or the refresh interval.
+    /// Publishes every name, then waits for a change or the refresh interval.
     async fn run(&self) {
         loop {
             let delay = match self.publish_round().await {
                 Ok(()) => PKARR_REFRESH,
                 Err(err) => {
-                    tracing::warn!(%err, "Pkarr publish failed");
+                    warn!(%err, "Pkarr publish failed");
                     RETRY
                 }
             };
@@ -234,13 +271,13 @@ impl State {
         }
     }
 
-    /// Record an edit, and wake the publishing task.
+    /// Records an edit and wakes the publishing task.
     fn edited(&self) {
         *self.generation.lock().expect("poisoned") += 1;
         self.changed.notify_one();
     }
 
-    /// Sign and publish every packet once.
+    /// Signs and publishes every packet once.
     ///
     /// Returns the first failure, after attempting all of them.
     async fn publish_round(&self) -> Result<()> {
@@ -251,7 +288,7 @@ impl State {
         let mut result = Ok(());
         for item in self.sign_all(&mut previous)? {
             match self.dht.put_mutable(item.clone(), None).await {
-                Ok(_) => tracing::debug!(
+                Ok(_) => debug!(
                     name = %pkarr_name(item.key()),
                     sequence = item.seq(),
                     "published Pkarr name"
@@ -266,7 +303,7 @@ impl State {
         result
     }
 
-    /// Sign the current packets, with a sequence number that always grows.
+    /// Signs the current packets, with a sequence number that always grows.
     fn sign_all(&self, previous: &mut i64) -> Result<Vec<MutableItem>> {
         // Mainline keeps the highest sequence it has seen, so a round that
         // lands in the same microsecond as the last one still has to count up.
@@ -287,7 +324,10 @@ impl State {
 }
 
 /// Returns whether `value` is a plain DNS hostname.
-fn is_hostname(value: &str) -> bool {
+///
+/// Publisher and gateway must agree on this, or a name a publisher accepts is
+/// one the gateway will not serve.
+pub fn is_hostname(value: &str) -> bool {
     let value = value.strip_suffix('.').unwrap_or(value);
     value.len() <= 253
         && value.contains('.')
@@ -309,6 +349,26 @@ mod tests {
 
     fn publisher() -> PkarrPublisher {
         PkarrPublisher::new(Dht::builder().no_bootstrap().port(0).build().unwrap())
+    }
+
+    #[test]
+    fn signed_packets_roundtrip_and_reject_tampering() {
+        let key = SigningKey::from_bytes(&[42; 32]);
+        let item = MutableItem::new(&key, b"packet", 1_700_000_000_000_000, None);
+        let bytes = encode_signed_packet(&item).unwrap();
+        assert_eq!(decode_signed_packet(&bytes), Some(item));
+        let mut tampered = bytes.clone();
+        *tampered.last_mut().unwrap() ^= 1;
+        assert!(decode_signed_packet(&tampered).is_none());
+        let mut changed_seq = bytes.clone();
+        changed_seq[96 + 7] ^= 1;
+        assert!(decode_signed_packet(&changed_seq).is_none());
+        assert!(decode_signed_packet(&bytes[..103]).is_none());
+        // Pkarr has no salt and no negative sequences.
+        assert!(
+            encode_signed_packet(&MutableItem::new(&key, b"packet", 1, Some(b"salt"))).is_none()
+        );
+        assert!(encode_signed_packet(&MutableItem::new(&key, b"packet", -1, None)).is_none());
     }
 
     #[tokio::test]
@@ -367,7 +427,7 @@ mod tests {
         assert_eq!(target_of(&reader, &late).await, "late.example");
     }
 
-    /// Resolve the newest packet for `key` and return its HTTPS target.
+    /// Resolves the newest packet for `key` and returns its HTTPS target.
     async fn target_of(dht: &Dht, key: &SigningKey) -> String {
         let public = key.verifying_key().to_bytes();
         let mut items = dht.get_mutable(&public, None, None).await.unwrap();

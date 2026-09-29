@@ -4,9 +4,13 @@ A localhost HTTP gateway for content-addressed files, including video. This is
 workspace project four, adapted from the streaming approach in
 [`iroh-examples/iroh-gateway`](https://github.com/n0-computer/iroh-examples/tree/main/iroh-gateway).
 
+The gateway is a command as much as a library, so its `cli` feature is on by
+default. Depend on it with `default-features = false` to embed `Gateway` in
+another program without pulling in `clap` and `tracing-subscriber`.
+
 ## Try the full workflow
 
-With the browser extension installed and enabled on port 8080:
+With the browser extension installed and enabled on port 45475:
 
 ```sh
 cargo run -p iroh-local-gateway --example demo -- /path/to/video.mp4
@@ -20,7 +24,7 @@ relays. The full browser flow is:
 
 ```text
 https://<public-key>.pkarr.net/
-  -> http://<public-key>.pkarr.localhost:8080/   (serves the named content)
+  -> http://<public-key>.pkarr.localhost:45475/   (serves the named content)
 ```
 
 The gateway resolves the signed HTTPS record on Mainline; when it names
@@ -51,13 +55,13 @@ Links from this mode work only through this demo's gateway.
 ## Standalone gateway
 
 ```sh
-cargo run -p iroh-local-gateway -- --listen 127.0.0.1:8080 --index-server 127.0.0.1:11223
+cargo run -p iroh-local-gateway -- --listen 127.0.0.1:45475 --index-server 127.0.0.1:60125
 ```
 
 Open:
 
 ```text
-http://127.0.0.1:8080/blake3/<z32>
+http://127.0.0.1:45475/blake3/<z32>
 ```
 
 For a sendme/swarmie collection root, `/blake3/<z32>` automatically shows a
@@ -69,9 +73,9 @@ The same content is also served on per-hash and per-key subdomains of
 `localhost`, which browsers and curl resolve to the loopback address:
 
 ```text
-http://<z32>.blake3.localhost:8080/
-http://<z32>.blake3.localhost:8080/<dir>/<name>
-http://<public-key>.pkarr.localhost:8080/
+http://<z32>.blake3.localhost:45475/
+http://<z32>.blake3.localhost:45475/<dir>/<name>
+http://<public-key>.pkarr.localhost:45475/
 ```
 
 Each hash and each key then has its own browser origin, and root-relative
@@ -166,11 +170,18 @@ the workspace's `Publisher` and blobs example.
 Server configuration follows one priority order:
 
 1. `--index-server IP:PORT` (`IROH_ADDR_INDEX`) skips discovery.
-2. `--index-list-key HEX` (`IROH_ADDR_INDEX_LIST_KEY`) selects the signed BEP44 list.
-3. `--rendezvous-hash HEX` (`IROH_ADDR_INDEX_RENDEZVOUS`) selects the fallback hash;
-   if omitted, the protocol's default rendezvous hash is used.
+2. `--index-list-key KEY` (`IROH_ADDR_INDEX_LIST_KEY`) selects a curated Pkarr list
+   of apex TXT `IPv4:port` records, publishable with iroh-share. It defaults to
+   the list maintained by n0,
+   `z6rb8uoy1pwuckhw8qx8i4qseczujxw4qakpe7xng3yi68wpyrqo`. See
+   [publishing a list](../README.md#curated-bootstrap-list-pkarr).
+3. `--rendezvous-hash HEX` (`IROH_ADDR_INDEX_RENDEZVOUS`) enables the untrusted
+   rendezvous fallback, for example with the protocol hash
+   `b86c3d910e1a67ec9ba8a69a95bd7f8b08be923b`. It is off by default.
 
-Use `--no-rendezvous` to disable the hash fallback. Public keys are 64 hex digits;
+Rendezvous is used only if the curated list yields no addresses. With
+`--state-dir`, the last resolved list is kept in `index-list.pkarr` and used
+when the record does not resolve. Public keys are z-base-32 or 64 hex digits;
 infohashes are 40 hex digits. `--dht-port` controls the local Mainline UDP port
 (default: an available port).
 
@@ -208,9 +219,9 @@ dropping the HTTP body drops the upstream request.
 iroh-blobs collections are browsed under the root hash:
 
 ```text
-http://127.0.0.1:8080/blake3/<z32>
-http://127.0.0.1:8080/blake3/<z32>/<dir>/
-http://127.0.0.1:8080/blake3/<z32>/<dir>/<name>
+http://127.0.0.1:45475/blake3/<z32>
+http://127.0.0.1:45475/blake3/<z32>/<dir>/
+http://127.0.0.1:45475/blake3/<z32>/<dir>/<name>
 ```
 
 Collection names are treated as `/`-separated paths. A path that matches a
@@ -302,3 +313,68 @@ at your option.
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in this project by you, as defined in the Apache-2.0 license, shall
 be dual licensed as above, without any additional terms or conditions.
+
+## Per-user installers
+
+The gateway installers start the gateway at login and listen on `127.0.0.1:45475`.
+Windows x64 uses an Inno Setup `.exe`; macOS Apple Silicon uses a current-user
+`.pkg`. Installation does not require administrator access. Stop any other gateway
+using port 45475 before installation.
+An occupied port fails startup without stopping the other application.
+
+- Windows installs in `%LOCALAPPDATA%\Programs\Iroh Gateway` with Start, Stop,
+  extension instructions, and Uninstall entries in the Start menu.
+- macOS installs `Iroh Gateway.app`, Start/Stop commands, an uninstaller, and
+  `Iroh Gateway Extensions` under `~/Applications`. A per-user LaunchAgent runs
+  the gateway; Start registers it and Stop unregisters it. The app also starts
+  the gateway when opened. Install for your account without `sudo`.
+
+Extensions are local files for manual installation; browser profiles are not
+modified. Open `extensions/Install extensions.html` on Windows or
+`~/Applications/Iroh Gateway Extensions/Install extensions.html` on macOS.
+Chrome/Brave uses Developer mode and Load unpacked. Firefox supports a temporary
+add-on; the included unsigned XPI can be installed permanently in Developer
+Edition, Nightly, or ESR with signature enforcement disabled. Release Firefox
+requires Mozilla signing for permanent installation. The instructions link to
+Mozilla's requirements. No extension signing or publishing happens during builds.
+
+Settings and logs live in `%LOCALAPPDATA%\iroh-local-gateway` on Windows and
+`~/Library/Application Support/iroh-local-gateway` on macOS. `gateway.log` contains
+runtime logs; on gateway startup, logs larger than 5 MiB replace
+`gateway.previous.log` and `gateway.log` starts empty. Logs are not rotated while
+the gateway is running. `launcher.log` contains startup failures. Uninstall
+preserves this directory. Remove browser extensions manually before uninstalling
+their files.
+
+`arguments.json` is a JSON array of gateway CLI arguments, initially `[]`.
+For example, `["--listen", "127.0.0.1:8081"]` selects another port. Stop the gateway,
+edit the file, and start it again; use the same port in the browser extension.
+On macOS, use the Start command to update the LaunchAgent's arguments.
+The background gateway retries index discovery while offline and can be stopped
+while waiting. Startup readiness means the local listener is bound; discovery
+must succeed before content requests can be served.
+
+The local lifecycle files are separate from the HTTP content server. No HTTP
+administration endpoint is exposed. `iroh-gateway-background` starts the gateway;
+its `stop` and `status` commands operate on the current user's instance. An optional
+`--state-dir` is available for isolated instances and testing.
+
+### Building installers
+
+Build the `iroh-local-gateway` package's binaries for
+`x86_64-pc-windows-msvc` or `aarch64-apple-darwin` in release mode, then run:
+
+```sh
+python packaging/gateway/stage.py <target>
+# On Windows (PowerShell):
+./packaging/gateway/windows/build.ps1
+# On macOS:
+python packaging/gateway/macos/build.py
+```
+
+Installers and SHA-256 files are written to `dist/`. The macOS app is ad-hoc signed;
+the installer is not Developer ID signed or notarized. Windows installers are
+unsigned. Native install/upgrade/uninstall smoke tests run on ephemeral CI runners.
+The `Gateway installers` workflow builds PR artifacts and supports manual runs;
+only `gateway-v*` tags publish GitHub release assets. No Linux installer or Intel
+macOS binary is built.

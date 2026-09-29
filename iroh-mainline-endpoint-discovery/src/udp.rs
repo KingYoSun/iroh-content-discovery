@@ -40,6 +40,9 @@ pub enum UdpError {
     Closed {},
 }
 
+/// Decides whether a looked-up value is good enough to stop waiting for others.
+pub(crate) type Accept = Box<dyn Fn(&[u8]) -> bool + Send>;
+
 /// Builds the value to store from the public socket a server observed.
 pub type ValueFor = Box<dyn Fn(SocketAddrV4) -> Vec<u8> + Send>;
 
@@ -53,6 +56,7 @@ enum ActorMsg {
     ),
     Resolve(
         SocketAddrV4,
+        Option<Accept>,
         oneshot::Sender<Result<ResolveResult, UdpError>>,
     ),
 }
@@ -64,12 +68,12 @@ pub struct UdpClient {
 }
 
 impl UdpClient {
-    /// Attach to `dht` using the default operation timeout.
+    /// Attaches to `dht` using the default operation timeout.
     pub async fn attach(dht: Dht) -> Result<Self, UdpError> {
         Self::attach_with_timeout(dht, DEFAULT_TIMEOUT).await
     }
 
-    /// Attach to `dht` and configure the operation timeout.
+    /// Attaches to `dht` with the given operation timeout.
     pub async fn attach_with_timeout(dht: Dht, timeout: Duration) -> Result<Self, UdpError> {
         let (incoming_tx, incoming_rx) = mpsc::channel(256);
         dht.set_datagram_hook(Some(DatagramHook::new(move |bytes, from| {
@@ -87,7 +91,7 @@ impl UdpClient {
         Ok(Self { tx })
     }
 
-    /// Add a server used by subsequent operations.
+    /// Adds a server used by subsequent operations.
     pub async fn add_server(&self, server: SocketAddrV4) -> Result<(), UdpError> {
         self.tx
             .send(ActorMsg::AddServer(server))
@@ -105,7 +109,7 @@ impl UdpClient {
             .map_err(|_| e!(UdpError::Closed))
     }
 
-    /// Remove a configured server.
+    /// Removes a configured server.
     pub async fn remove_server(&self, server: SocketAddrV4) -> Result<(), UdpError> {
         self.tx
             .send(ActorMsg::RemoveServer(server))
@@ -113,7 +117,7 @@ impl UdpClient {
             .map_err(|_| e!(UdpError::Closed))
     }
 
-    /// Obtain tokens and publish a value to every responsive server.
+    /// Obtains tokens and publishes a value to every responsive server.
     ///
     /// The value is built per server, from the public socket that server
     /// observed, which is only known once it has answered. Servers behind
@@ -132,34 +136,34 @@ impl UdpClient {
         rx.await.map_err(|_| e!(UdpError::Closed))?
     }
 
-    /// Publish to one server, adding it to this client first.
-    pub async fn publish_to(
-        &self,
-        server: SocketAddrV4,
-        value: impl Fn(SocketAddrV4) -> Vec<u8> + Send + 'static,
-    ) -> Result<Vec<SocketAddrV4>, UdpError> {
-        self.add_server(server).await?;
-        self.publish(value).await
+    /// Reads and deduplicates opaque values from all configured servers.
+    pub async fn resolve(&self, addr: SocketAddrV4) -> Result<ResolveResult, UdpError> {
+        self.resolve_with(addr, None).await
     }
 
-    /// Read and deduplicate opaque values from all configured servers.
-    pub async fn resolve(&self, addr: SocketAddrV4) -> Result<ResolveResult, UdpError> {
+    /// Reads values, returning as soon as one passes `accept`.
+    ///
+    /// Without such a value, it waits for all servers as [`Self::resolve`]
+    /// does, since a server that has not answered yet may hold one.
+    pub(crate) async fn resolve_first(
+        &self,
+        addr: SocketAddrV4,
+        accept: Accept,
+    ) -> Result<ResolveResult, UdpError> {
+        self.resolve_with(addr, Some(accept)).await
+    }
+
+    async fn resolve_with(
+        &self,
+        addr: SocketAddrV4,
+        accept: Option<Accept>,
+    ) -> Result<ResolveResult, UdpError> {
         let (tx, rx) = oneshot::channel();
         self.tx
-            .send(ActorMsg::Resolve(addr, tx))
+            .send(ActorMsg::Resolve(addr, accept, tx))
             .await
             .map_err(|_| e!(UdpError::Closed))?;
         rx.await.map_err(|_| e!(UdpError::Closed))?
-    }
-
-    /// Resolve through one server, adding it to this client first.
-    pub async fn resolve_from(
-        &self,
-        server: SocketAddrV4,
-        addr: SocketAddrV4,
-    ) -> Result<ResolveResult, UdpError> {
-        self.add_server(server).await?;
-        self.resolve(addr).await
     }
 }
 
@@ -172,11 +176,12 @@ pub struct ResolveResult {
 
 struct PendingPublish {
     value: ValueFor,
-    /// Set when a built value did not fit, so the failure is not a timeout.
+    /// Whether a built value was too large, so the failure is not a timeout.
     too_large: bool,
     awaiting: HashSet<SocketAddrV4>,
-    /// Servers already sent a put, so a repeated or forged `Prepared` cannot
-    /// make us send the value again.
+    /// Servers already sent a put.
+    ///
+    /// A repeated or forged `Prepared` cannot make us send the value again.
     prepared: HashSet<SocketAddrV4>,
     stored: HashSet<SocketAddrV4>,
     response: oneshot::Sender<Result<Vec<SocketAddrV4>, UdpError>>,
@@ -185,6 +190,8 @@ struct PendingPublish {
 
 struct PendingResolve {
     addr: SocketAddrV4,
+    /// Finishes the lookup early on the first value it accepts.
+    accept: Option<Accept>,
     awaiting: HashSet<SocketAddrV4>,
     values: HashSet<Vec<u8>>,
     responded: bool,
@@ -238,7 +245,7 @@ impl Actor {
         }
     }
 
-    /// A transaction id an off-path attacker cannot guess.
+    /// Returns a transaction id an off-path attacker cannot guess.
     ///
     /// Our socket and the servers we talk to are both public, so a predictable
     /// id would be enough to answer a lookup on a server's behalf.
@@ -289,7 +296,7 @@ impl Actor {
                     let _ = response.send(Err(e!(UdpError::TooLarge)));
                 }
             }
-            ActorMsg::Resolve(addr, response) => {
+            ActorMsg::Resolve(addr, accept, response) => {
                 if self.servers.is_empty() {
                     let _ = response.send(Err(e!(UdpError::NoServers)));
                     return;
@@ -298,14 +305,16 @@ impl Actor {
                 let request = Request::V1(RequestV1::Get { tx, addr });
                 if let Some(bytes) = encode(request, buf) {
                     for server in &self.servers {
+                        debug!(indexer = %server, peer = %addr, "querying indexer");
                         if let Err(err) = self.dht.send_datagram(bytes.to_vec(), *server).await {
-                            debug!(%server, %err, "send get");
+                            debug!(indexer = %server, peer = %addr, %err, "send get");
                         }
                     }
                     self.resolves.insert(
                         tx,
                         PendingResolve {
                             addr,
+                            accept,
                             awaiting: self.servers.clone(),
                             values: HashSet::new(),
                             responded: false,
@@ -369,13 +378,26 @@ impl Actor {
                 if pending.addr != addr || !pending.awaiting.remove(&from) {
                     return;
                 }
+                debug!(
+                    indexer = %from,
+                    peer = %addr,
+                    found = %match value.as_deref() {
+                        Some(bytes) => crate::SignedRecord::decode(bytes, addr)
+                            .map(|record| record.endpoint_id.to_string())
+                            .unwrap_or_else(|| "invalid".to_owned()),
+                        None => "none".to_owned(),
+                    },
+                    "indexer responded"
+                );
                 pending.responded = true;
+                let mut accepted = false;
                 if let Some(value) = value
                     && value.len() <= MAX_VALUE_LEN
                 {
+                    accepted = pending.accept.as_ref().is_some_and(|accept| accept(&value));
                     pending.values.insert(value);
                 }
-                if pending.awaiting.is_empty() {
+                if accepted || pending.awaiting.is_empty() {
                     self.finish_resolve(tx);
                 }
             }
@@ -432,6 +454,12 @@ impl Actor {
         let Some(pending) = self.resolves.remove(&tx) else {
             return;
         };
+        // After an early finish, the others simply were not waited for.
+        if pending.deadline <= tokio::time::Instant::now() {
+            for server in &pending.awaiting {
+                debug!(indexer = %server, peer = %pending.addr, "index lookup timed out");
+            }
+        }
         let result = if !pending.responded {
             Err(e!(UdpError::Timeout))
         } else {

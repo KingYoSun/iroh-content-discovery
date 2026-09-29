@@ -1,16 +1,20 @@
-//! Show that another UDP socket cannot replace a publisher's address-index value.
+//! Shows that another UDP socket cannot replace a publisher's address-index value.
 //!
 //! A public server is required so it and Mainline observe the same public UDP
 //! mapping for the shared DHT socket.
 
-use std::time::{Duration, Instant};
+use std::{
+    net::SocketAddrV4,
+    time::{Duration, Instant},
+};
 
 use iroh::{SecretKey, endpoint::presets};
 use iroh_mainline_endpoint_discovery::{
-    AddrIndex, Publisher, Resolver, infohash_from_blake3, parse_infohash,
+    AddrIndex, AddrIndexBuilder, Publisher, Resolver, infohash_from_blake3, parse_infohash,
 };
 use n0_error::{Result, StackResultExt, StdResultExt, bail_any};
 use n0_mainline::{Dht, Id};
+use tracing::{debug, warn};
 
 const RESOLVE_DELAY: Duration = Duration::from_secs(5);
 const RESOLVE_BUDGET: Duration = Duration::from_secs(60);
@@ -46,12 +50,9 @@ async fn main() -> Result<()> {
     if !dht.bootstrapped().await? {
         bail_any!("DHT bootstrap failed");
     }
-    let index = match server {
-        Some(server) => AddrIndex::udp(dht.clone(), server).await?,
-        None => AddrIndex::discover(dht.clone()).await?,
-    };
+    let index = index_builder(dht.clone(), server).build().await?;
     let publisher = Publisher::new(secret, dht.clone(), index.clone());
-    let resolver = Resolver::bind(dht, index).await?;
+    let resolver = Resolver::new(dht, index);
     for infohash in infohashes {
         publisher.add_infohash(infohash);
     }
@@ -67,10 +68,7 @@ async fn main() -> Result<()> {
         println!("published {mapping}");
 
         let attacker_dht = Dht::client().std_context("attacker DHT socket")?;
-        let attacker = match server {
-            Some(server) => AddrIndex::udp(attacker_dht, server).await?,
-            None => AddrIndex::discover(attacker_dht).await?,
-        };
+        let attacker = index_builder(attacker_dht, server).build().await?;
         let attacker_addrs = attacker.publish(&SecretKey::generate()).await?;
         println!("attacker could only publish at {attacker_addrs:?}");
 
@@ -108,8 +106,8 @@ async fn resolve_publisher(
                 println!("resolved {infohash} to {expected}");
                 return Ok(());
             }
-            Ok(ids) => tracing::debug!(?ids, "publisher not returned yet"),
-            Err(err) => tracing::warn!(%err, "resolve"),
+            Ok(ids) => debug!(?ids, "publisher not returned yet"),
+            Err(err) => warn!(%err, "resolve"),
         }
         if Instant::now() >= deadline {
             bail_any!("timed out resolving {infohash} to {expected}");
@@ -126,4 +124,13 @@ fn parse_infohashes(args: impl IntoIterator<Item = String>) -> Result<Vec<Id>> {
                 .with_std_context(|_| format!("hash {value}"))
         })
         .collect()
+}
+
+/// Uses `server` if given, otherwise the index servers listed by n0.
+fn index_builder(dht: Dht, server: Option<SocketAddrV4>) -> AddrIndexBuilder {
+    let builder = AddrIndex::builder(dht).n0_defaults();
+    match server {
+        Some(server) => builder.server(server),
+        None => builder,
+    }
 }

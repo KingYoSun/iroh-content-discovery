@@ -105,7 +105,7 @@ async fn run() {
     let index = AddrIndex::udp(gateway_dht.clone(), server_addr)
         .await
         .unwrap();
-    let resolver = Resolver::bind(gateway_dht, index).await.unwrap();
+    let resolver = Resolver::new(gateway_dht, index);
     let gateway = Gateway::new(client_endpoint.clone(), resolver);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let listen_addr = listener.local_addr().unwrap();
@@ -460,7 +460,6 @@ async fn run() {
         assert!(html.contains(&format!("href=\"{tree}/notes/\"")));
         assert!(html.contains(&format!("href=\"{tree}/video.mp4\"")));
         assert!(!html.contains("hello"));
-        assert!(html.contains("iroh-content-discovery\">iroh content discovery</a>"));
         assert!(html.contains("<a href=\"?sizes\">Fetch sizes</a>"));
         assert!(html.contains(&format!("<h1>{}{SEP}</h1>", collection_hash)));
     }

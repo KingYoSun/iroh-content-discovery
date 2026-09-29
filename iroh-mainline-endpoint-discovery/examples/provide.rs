@@ -1,5 +1,6 @@
-//! Provide a file or directory through iroh-blobs and announce every blob
-//! and the collection on Mainline.
+//! Provides a file or directory through iroh-blobs.
+//!
+//! Every blob and the collection itself are announced on Mainline.
 
 use std::{
     net::SocketAddrV4,
@@ -21,6 +22,7 @@ use iroh_mainline_endpoint_discovery::{
 };
 use n0_error::{Result, StdResultExt, bail_any};
 use n0_mainline::{Dht, Id, SigningKey};
+use tracing::info;
 
 /// Provide files and announce their hashes on Mainline.
 #[derive(Debug, Parser)]
@@ -66,10 +68,11 @@ async fn main() -> Result<()> {
     if !dht.bootstrapped().await? {
         bail_any!("DHT bootstrap failed");
     }
-    let index = match cli.index_server {
-        Some(server) => AddrIndex::udp(dht.clone(), server).await?,
-        None => AddrIndex::discover(dht.clone()).await?,
-    };
+    let mut builder = AddrIndex::builder(dht.clone()).n0_defaults();
+    if let Some(server) = cli.index_server {
+        builder = builder.server(server);
+    }
+    let index = builder.build().await?;
     let publisher = Publisher::new(endpoint.secret_key().clone(), dht.clone(), index);
     for (_, hash) in &entries {
         publisher.add_infohash(infohash(hash));
@@ -86,7 +89,7 @@ async fn main() -> Result<()> {
     // With the browser extension, the link URLs reach the local gateway.
     println!("\nBlake3 gateway URLs:");
     println!("    https://{collection}.{BLAKE3_DOMAIN}/");
-    println!("    http://{collection}.blake3.localhost:8080/");
+    println!("    http://{collection}.blake3.localhost:45475/");
 
     // The name outlives this run; the hash it points at does not. The
     // publisher keeps republishing in its own task until it is dropped.
@@ -97,7 +100,7 @@ async fn main() -> Result<()> {
             let name = pkarr_name(&key.verifying_key().to_bytes());
             println!("\nPkarr gateway URLs:");
             println!("    https://{name}.{PKARR_DOMAIN}/");
-            println!("    http://{name}.pkarr.localhost:8080/");
+            println!("    http://{name}.pkarr.localhost:45475/");
             n0_error::Ok(publisher)
         })
         .transpose()?;
@@ -107,7 +110,7 @@ async fn main() -> Result<()> {
     if let Some(pkarr) = &pkarr {
         pkarr.wait_published().await;
     }
-    tracing::info!("published, press Ctrl-C to stop");
+    info!("published, press Ctrl-C to stop");
     let result = tokio::signal::ctrl_c().await.anyerr();
     // Router shutdown also shuts down the store before the directory is removed.
     router.shutdown().await.anyerr()?;

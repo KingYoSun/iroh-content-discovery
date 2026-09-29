@@ -11,7 +11,7 @@ use udp_addr_index::{Limits, Server};
 use udp_addr_index_proto::{MAX_DGRAM, Proto, Request, RequestV1, Response, ResponseV1};
 
 #[tokio::test]
-async fn unannounced_replica_publishes_and_resolves_opaque_bytes() {
+async fn an_unannounced_server_stores_and_returns_opaque_bytes() {
     let server = Server::new(Limits::for_tests());
     let handle = server
         .attach_with_rendezvous(test_dht(), None)
@@ -175,8 +175,56 @@ async fn discovery_directory_validates_opaque_record() {
     assert!(index.lookup(addr).await.unwrap().is_empty());
 }
 
-/// Reads are public, so a record can be copied. It is signed for the socket it
-/// was stored under, so a reader discards it anywhere else.
+#[tokio::test]
+async fn cached_lookups_reach_the_server_once() {
+    let server = Server::new(Limits::for_tests());
+    let handle = server.attach(test_dht()).await.unwrap();
+    let index = AddrIndex::builder(test_dht())
+        .server(v4(loopback(handle.local_addr())))
+        .lookup_cache(Duration::from_secs(60))
+        .build()
+        .await
+        .unwrap();
+    let addr = index.publish(&SecretKey::generate()).await.unwrap()[0];
+    // Concurrent lookups share one request; later ones, from any clone, hit the cache.
+    let (first, second) = tokio::join!(index.lookup(addr), index.lookup(addr));
+    assert_eq!(first.unwrap().len(), 1);
+    assert_eq!(second.unwrap().len(), 1);
+    assert_eq!(index.clone().lookup(addr).await.unwrap().len(), 1);
+    assert_eq!(server.metrics().gets.get(), 1);
+}
+
+#[tokio::test]
+async fn a_dead_index_server_does_not_delay_found_records() {
+    let server = Server::new(Limits::for_tests());
+    let handle = server.attach(test_dht()).await.unwrap();
+    let timeout = Duration::from_millis(500);
+    let index = AddrIndex::builder(test_dht())
+        .server(v4(loopback(handle.local_addr())))
+        // Nothing listens on the discard port.
+        .server("127.0.0.1:9".parse().unwrap())
+        .timeout(timeout)
+        .build()
+        .await
+        .unwrap();
+    let secret = SecretKey::generate();
+    // Publishing succeeds with the live server alone.
+    let addr = index.publish(&secret).await.unwrap()[0];
+    let started = std::time::Instant::now();
+    let records = index.lookup(addr).await.unwrap();
+    assert_eq!(records[0].endpoint_id, secret.public());
+    assert!(started.elapsed() < timeout / 2, "{:?}", started.elapsed());
+    // Without a record, the dead server might hold one, so the lookup waits.
+    let started = std::time::Instant::now();
+    let missing = "127.0.0.1:1".parse().unwrap();
+    assert!(index.lookup(missing).await.unwrap().is_empty());
+    assert!(started.elapsed() >= timeout);
+}
+
+/// Reads are public, so a record can be copied.
+///
+/// It is signed for the socket it was stored under, so a reader discards it
+/// anywhere else.
 #[tokio::test]
 async fn a_copied_record_does_not_resolve_under_another_socket() {
     let server = Server::new(Limits::for_tests());
@@ -221,7 +269,11 @@ async fn servers_are_discovered_on_mainline_and_share_the_announced_socket() {
             .build()
             .unwrap();
         let index = loop {
-            match AddrIndex::discover(reader_dht.clone()).await {
+            match AddrIndex::builder(reader_dht.clone())
+                .rendezvous_hash(udp_addr_index_proto::RENDEZVOUS_INFOHASH)
+                .build()
+                .await
+            {
                 Ok(index) => break index,
                 Err(iroh_mainline_endpoint_discovery::UdpError::NoServers { .. }) => {
                     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -276,12 +328,10 @@ async fn resolver_stream_yields_all_announced_endpoints() {
             dht.announce_peer(infohash, None).await.unwrap();
         }
         let reader = node();
-        let resolver = Resolver::bind(
+        let resolver = Resolver::new(
             reader.clone(),
             AddrIndex::udp(reader, server_addr).await.unwrap(),
-        )
-        .await
-        .unwrap();
+        );
         let mut stream = resolver.resolve_stream(infohash).await.unwrap();
         let mut actual = Vec::new();
         while let Some(id) = stream.next().await {
@@ -332,12 +382,10 @@ async fn publisher_announces_endpoint_for_resolver() {
         publisher.add_infohash(infohash);
 
         let reader = node();
-        let resolver = Resolver::bind(
+        let resolver = Resolver::new(
             reader.clone(),
             AddrIndex::udp(reader, server_addr).await.unwrap(),
-        )
-        .await
-        .unwrap();
+        );
         // `wait_published` fires before the announcements, so keep looking
         // until the publisher's endpoint shows up.
         let mut found = resolver.resolve_continuously(infohash);
@@ -345,6 +393,85 @@ async fn publisher_announces_endpoint_for_resolver() {
     })
     .await
     .expect("publisher announcement was not resolved");
+}
+
+#[tokio::test]
+async fn announcing_many_hashes_publishes_the_index_record_once() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let network = n0_mainline::Testnet::new(3).await.unwrap();
+        let node = || {
+            Dht::builder()
+                .bootstrap(&network.bootstrap)
+                .port(0)
+                .build()
+                .unwrap()
+        };
+        let server = Server::new(Limits::for_tests());
+        let handle = server.attach(node()).await.unwrap();
+        let server_addr = v4(loopback(handle.local_addr()));
+        let dht = node();
+        let publisher = Publisher::new(
+            SecretKey::generate(),
+            dht.clone(),
+            AddrIndex::udp(dht, server_addr).await.unwrap(),
+        );
+        let hashes: Vec<_> = (80..84)
+            .map(|byte| n0_mainline::Id::from([byte; 20]))
+            .collect();
+        for hash in &hashes {
+            publisher.add_infohash(*hash);
+        }
+        let reader = node();
+        let resolver = Resolver::new(
+            reader.clone(),
+            AddrIndex::udp(reader, server_addr).await.unwrap(),
+        );
+        for hash in &hashes {
+            let mut found = resolver.resolve_continuously(*hash);
+            assert_eq!(found.next().await, Some(publisher.id()));
+        }
+        // Each announcement checked the record, but nothing changed.
+        assert_eq!(server.metrics().puts.get(), 1);
+    })
+    .await
+    .expect("announcements were not resolved");
+}
+
+/// Readers could not resolve an announcement no index server knows about.
+#[tokio::test]
+async fn nothing_is_announced_without_an_index_server() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let network = n0_mainline::Testnet::new(3).await.unwrap();
+        let node = || {
+            Dht::builder()
+                .bootstrap(&network.bootstrap)
+                .port(0)
+                .build()
+                .unwrap()
+        };
+        // Nothing listens on the discard port, so every publication fails.
+        let unreachable = "127.0.0.1:9".parse().unwrap();
+        let dht = node();
+        let publisher = Publisher::new(
+            SecretKey::generate(),
+            dht.clone(),
+            AddrIndex::udp(dht, unreachable).await.unwrap(),
+        );
+        let infohash = n0_mainline::Id::from([90; 20]);
+        publisher.add_infohash(infohash);
+        // Give the publisher time to try: the index times out after two seconds.
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let mut peers = node().get_peers(infohash).await.unwrap();
+        while let Some(batch) = peers.next().await {
+            assert!(
+                batch.is_empty(),
+                "announced without an index record: {batch:?}"
+            );
+        }
+        assert_eq!(publisher.public_v4(), None);
+    })
+    .await
+    .expect("test timed out");
 }
 
 async fn send(socket: &UdpSocket, destination: std::net::SocketAddr, message: Request) {
@@ -400,12 +527,17 @@ async fn signed_bootstrap_works_without_rendezvous_announcements() {
             .unwrap();
         // No node has announced a rendezvous peer. Only the trusted record can
         // supply a candidate (discovery does not require it to be responsive).
-        AddrIndex::discover_with_authority(reader.clone(), key.verifying_key().to_bytes())
+        AddrIndex::builder(reader.clone())
+            .list_key(key.verifying_key().to_bytes())
+            .build()
             .await
             .unwrap();
         let other = n0_mainline::SigningKey::from_bytes(&[43; 32]);
         assert!(matches!(
-            AddrIndex::discover_with_authority(reader, other.verifying_key().to_bytes()).await,
+            AddrIndex::builder(reader)
+                .list_key(other.verifying_key().to_bytes())
+                .build()
+                .await,
             Err(iroh_mainline_endpoint_discovery::UdpError::NoServers { .. })
         ));
     })
@@ -415,7 +547,7 @@ async fn signed_bootstrap_works_without_rendezvous_announcements() {
 
 #[tokio::test]
 async fn signed_list_precedes_custom_rendezvous_fallback() {
-    use iroh_mainline_endpoint_discovery::{DiscoveryConfig, ServerList};
+    use iroh_mainline_endpoint_discovery::ServerList;
     use std::net::{Ipv4Addr, SocketAddrV4};
     tokio::time::timeout(Duration::from_secs(30), async {
         let network = n0_mainline::Testnet::new(3).await.unwrap();
@@ -453,12 +585,10 @@ async fn signed_list_precedes_custom_rendezvous_fallback() {
             )
             .await
             .unwrap();
-        let config = DiscoveryConfig {
-            server: None,
-            public_key: Some(key.verifying_key().to_bytes()),
-            rendezvous_hash: Some(hash),
-        };
-        let index = AddrIndex::discover_with_config(node(), config)
+        let index = AddrIndex::builder(node())
+            .list_key(key.verifying_key().to_bytes())
+            .rendezvous_hash(hash)
+            .build()
             .await
             .unwrap();
         let secret = SecretKey::generate();
@@ -466,16 +596,12 @@ async fn signed_list_precedes_custom_rendezvous_fallback() {
         assert!(signed_server.get_local(addr).is_some());
         assert!(fallback_server.get_local(addr).is_none());
         let other = n0_mainline::SigningKey::from_bytes(&[45; 32]);
-        let index = AddrIndex::discover_with_config(
-            node(),
-            DiscoveryConfig {
-                server: None,
-                public_key: Some(other.verifying_key().to_bytes()),
-                rendezvous_hash: Some(hash),
-            },
-        )
-        .await
-        .unwrap();
+        let index = AddrIndex::builder(node())
+            .list_key(other.verifying_key().to_bytes())
+            .rendezvous_hash(hash)
+            .build()
+            .await
+            .unwrap();
         let addr = index.publish(&secret).await.unwrap()[0];
         assert!(fallback_server.get_local(addr).is_some());
     })
@@ -485,21 +611,17 @@ async fn signed_list_precedes_custom_rendezvous_fallback() {
 
 #[tokio::test]
 async fn explicit_server_bypasses_both_discovery_sources() {
-    use iroh_mainline_endpoint_discovery::DiscoveryConfig;
     let server = Server::new(Limits::for_tests());
     let handle = server.attach(test_dht()).await.unwrap();
     let server_addr = v4(loopback(handle.local_addr()));
     let dht = Dht::builder().no_bootstrap().port(0).build().unwrap();
     let index = tokio::time::timeout(
         Duration::from_secs(1),
-        AddrIndex::discover_with_config(
-            dht,
-            DiscoveryConfig {
-                server: Some(server_addr),
-                public_key: Some([42; 32]),
-                rendezvous_hash: Some([91; 20]),
-            },
-        ),
+        AddrIndex::builder(dht)
+            .server(server_addr)
+            .list_key([42; 32])
+            .rendezvous_hash([91; 20])
+            .build(),
     )
     .await
     .unwrap()

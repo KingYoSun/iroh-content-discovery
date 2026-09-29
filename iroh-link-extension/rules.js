@@ -1,4 +1,4 @@
-export const DEFAULT_SETTINGS = { port: 8080, enabled: true };
+export const DEFAULT_SETTINGS = { port: 45475, enabled: true };
 
 // One entry per link domain: the public name, and the localhost suffix the
 // gateway serves it under. Rule ids follow this order.
@@ -42,7 +42,9 @@ export function makeRules(settings) {
       redirect: { regexSubstitution: `http://\\1.${origin}:${port}/\\2` },
     },
     condition: {
-      regexFilter: `^https?://([a-z0-9]{52})\\.${name.replace(".", "\\.")}(?::[0-9]+)?/(.*)$`,
+      // Keep the regex small enough for Chromium's compiled-rule limit.
+      // The gateway validates the label's z32 alphabet and length.
+      regexFilter: `^https?://([^./:@]+)\\.${name.replace(".", "\\.")}(?::[0-9]+)?/(.*)$`,
       isUrlFilterCaseSensitive: true,
       resourceTypes,
     },

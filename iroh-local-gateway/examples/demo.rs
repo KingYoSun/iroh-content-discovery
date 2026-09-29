@@ -11,25 +11,28 @@ use iroh::{Endpoint, address_lookup::memory::MemoryLookup, endpoint::presets, pr
 use iroh_blobs::{BlobsProtocol, store::fs::FsStore};
 use iroh_local_gateway::Gateway;
 use iroh_mainline_endpoint_discovery::{
-    AddrIndex, BLAKE3_DOMAIN, DiscoveryConfig, PKARR_DOMAIN, PkarrPublisher, Publisher, Resolver,
+    AddrIndex, BLAKE3_DOMAIN, PKARR_DOMAIN, PkarrPublisher, Publisher, Resolver,
     infohash_from_blake3, pkarr_name,
 };
 use n0_error::{Result, StackResultExt, StdResultExt};
 use n0_mainline::{Dht, SigningKey, Testnet};
+use tracing::debug;
 use udp_addr_index::{Limits, Server};
 
 #[derive(Parser)]
 #[command(about = "Serve a file via Pkarr and a local gateway, using public Mainline")]
 struct Args {
-    /// File to serve, for example an MP4. Without a file, serve a text greeting.
+    /// File to serve, for example an MP4.
+    ///
+    /// Without a file, the gateway serves a short text greeting.
     file: Option<PathBuf>,
     /// Local HTTP port; configure the same port in the browser extension.
-    #[arg(long, default_value_t = 8080)]
+    #[arg(long, default_value_t = 45475)]
     port: u16,
     /// Use an isolated local DHT, server, and iroh discovery instead of public services.
     #[arg(long)]
     local_testnet: bool,
-    /// Explicit public index server IPv4:port; otherwise discover index servers through Mainline.
+    /// Explicit public index server IPv4:port; otherwise use the servers listed by n0.
     #[arg(long, env = "IROH_ADDR_INDEX", conflicts_with = "local_testnet")]
     index_server: Option<SocketAddrV4>,
 }
@@ -97,12 +100,16 @@ async fn main() -> Result<()> {
         .as_ref()
         .map(|server| SocketAddrV4::new(Ipv4Addr::LOCALHOST, server.local_addr().port()))
         .or(args.index_server);
-    let config = DiscoveryConfig {
-        server: server_addr,
-        ..Default::default()
+    let index_builder = |dht: Dht| {
+        let builder = AddrIndex::builder(dht).n0_defaults();
+        match server_addr {
+            Some(server) => builder.server(server),
+            None => builder,
+        }
     };
     let provider_dht = node()?;
-    let index = AddrIndex::discover_with_config(provider_dht.clone(), config.clone())
+    let index = index_builder(provider_dht.clone())
+        .build()
         .await
         .context(
             "index server discovery failed; supply --index server IP:PORT for an available public index server",
@@ -118,7 +125,7 @@ async fn main() -> Result<()> {
     let router = Router::builder(provider.clone())
         .accept(iroh_blobs::ALPN, BlobsProtocol::new(&store, None))
         .spawn();
-    tracing::debug!(endpoint = %provider.id(), %hash, "demo blob provider started");
+    debug!(endpoint = %provider.id(), %hash, "demo blob provider started");
     let publisher = Publisher::new(provider.secret_key().clone(), provider_dht.clone(), index);
     publisher.add_infohash(infohash);
     let key = SigningKey::from_bytes(&rand::random());
@@ -135,10 +142,11 @@ async fn main() -> Result<()> {
         Endpoint::bind(presets::N0).await?
     };
     let gateway_dht = node()?;
-    let index = AddrIndex::discover_with_config(gateway_dht.clone(), config)
+    let index = index_builder(gateway_dht.clone())
+        .build()
         .await
         .context("gateway index server discovery failed")?;
-    let gateway = Gateway::new(client.clone(), Resolver::bind(gateway_dht, index).await?);
+    let gateway = Gateway::new(client.clone(), Resolver::new(gateway_dht, index));
     let serve = async {
         tokio::time::timeout(Duration::from_secs(120), publisher.wait_published())
             .await
@@ -146,7 +154,7 @@ async fn main() -> Result<()> {
         tokio::time::timeout(Duration::from_secs(60), pkarr.publish_all())
             .await
             .std_context("Pkarr publication timed out")??;
-        tracing::debug!(%public_key, %target, "demo Pkarr record published");
+        debug!(%public_key, %target, "demo Pkarr record published");
         println!("\nExtension port: {}", http_addr.port());
         println!("Open:         https://{public_key}.{PKARR_DOMAIN}/");
         println!("Serves:       https://{encoded}.{BLAKE3_DOMAIN}/");
