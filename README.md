@@ -108,38 +108,44 @@ flag when clients reach you through an explicit address or a signed list. The
 CLI binds all IPv4 interfaces at `--dht-port`, 60125 by default, so allow
 inbound UDP there. Mainline can choose the port but not the interface.
 
-`AddrIndex::discover(dht)` finds servers with `get_peers` and then uses the same
-DHT socket for index requests. It refreshes on use after ten minutes, keeps at
-most two candidates, and gives discovery thirty seconds. Finding none is an
-error. Announcements are untrusted, so the candidates may be unreachable or
-dishonest; the signed endpoint records they serve are validated either way.
+`AddrIndex::discover(dht)` reads the signed server list maintained by n0, whose
+Pkarr key is `DEFAULT_INDEX_LIST_KEY`
+(`z6rb8uoy1pwuckhw8qx8i4qseczujxw4qakpe7xng3yi68wpyrqo`), and then uses the
+same DHT socket for index requests. It refreshes on use after ten minutes,
+keeps at most two servers, and gives each lookup thirty seconds. Finding none
+is an error. Rendezvous discovery through `get_peers` is opt-in with the
+builder below. Its announcements are untrusted, so those candidates may be
+unreachable or dishonest; the signed endpoint records they serve are validated
+either way.
 
-The examples discover servers by default. Set `IROH_ADDR_INDEX=ip:port` to pin
-one instead, or call `AddrIndex::udp(dht, server)` in code. Mainline bootstrap
+The examples and the gateway use `AddrIndex::builder(dht).n0_defaults()`. Set
+`IROH_ADDR_INDEX=ip:port` to pin one server instead, or add `.server(addr)` in
+code. Mainline bootstrap
 nodes are still required, since no server address is hardcoded. The
 `udp-addr-index` binary exits if its service or announcement task stops, and
 shuts down on Ctrl-C or SIGTERM.
 
 ### Curated bootstrap list (Pkarr)
 
-An explicit server and the two discovery sources are configured independently.
-The trusted Pkarr key is tried first, and the rendezvous hash only when the
-signed list yields nothing. Each lookup has a thirty-second deadline.
+`AddrIndex::builder(dht)` configures where servers come from. Explicit
+servers are used as given and skip discovery. Otherwise the trusted Pkarr
+list is tried first, and the rendezvous hash only when the signed list yields
+nothing. Each lookup has a thirty-second deadline.
 
 ```rust,ignore
-let index = AddrIndex::discover_with_config(dht, DiscoveryConfig {
-    server: None, // Some("203.0.113.1:6881".parse()?) bypasses discovery
-    public_key: Some(public_key),
-    rendezvous_hash: Some(rendezvous_hash),
-}).await?;
+let index = AddrIndex::builder(dht)
+    .list_key(public_key)             // trusted Pkarr list, tried first
+    .rendezvous_hash(rendezvous_hash) // untrusted fallback
+    // .server("203.0.113.1:60125".parse()?) bypasses discovery
+    .build()
+    .await?;
 ```
 
-Each field is optional. An explicit `server` takes precedence over the key and
-the hash, and skips discovery entirely. Either discovery field can be `None` to
-turn that source off. `AddrIndex::discover` uses the default rendezvous hash
-with no key as an explicit convenience helper. `AddrIndex::discover_with_authority`
-uses only the supplied key. `DiscoveryConfig::default()` has no sources; without
-a server, key, or hash, discovery returns `NoServers` immediately. A server announces under a custom hash with
+The builder starts empty; `n0_defaults()` sets the list maintained by n0,
+`DEFAULT_INDEX_LIST_KEY`. With no server, key, or hash, `build` returns
+`NoServers` immediately. `AddrIndex::udp(dht, server)` and
+`AddrIndex::discover(dht)` are shorthands for one explicit server and for
+`builder(dht).n0_defaults()`. A server announces under a custom hash with
 `Server::attach_with_rendezvous(dht, Some(hash))`.
 
 Discovery keeps at most two servers, and a signed list holds up to two
@@ -180,9 +186,12 @@ z-base-32 key displayed by iroh-share (without `https://` or `.pkarr.net`):
 iroh-local-gateway --index-list-key <pkarr-public-key>
 ```
 
-Add `--rendezvous-hash b86c3d910e1a67ec9ba8a69a95bd7f8b08be923b` to allow
-the public rendezvous fallback. With both options, curated addresses take precedence.
-With no discovery options set, the gateway uses the default rendezvous hash above.
+Without `--index-list-key`, the gateway uses `DEFAULT_INDEX_LIST_KEY`. Add
+`--rendezvous-hash b86c3d910e1a67ec9ba8a69a95bd7f8b08be923b` to allow the
+public rendezvous fallback; curated addresses take precedence. With
+`--state-dir`, the gateway stores the last list it resolved in
+`index-list.pkarr`, a Pkarr signed packet that is verified again when read,
+and uses it when the record does not resolve.
 Pkarr sequences are Unix timestamps in microseconds; iroh-share manages them automatically.
 The previous salted binary list format is no longer read.
 

@@ -223,7 +223,11 @@ async fn servers_are_discovered_on_mainline_and_share_the_announced_socket() {
             .build()
             .unwrap();
         let index = loop {
-            match AddrIndex::discover(reader_dht.clone()).await {
+            match AddrIndex::builder(reader_dht.clone())
+                .rendezvous_hash(udp_addr_index_proto::RENDEZVOUS_INFOHASH)
+                .build()
+                .await
+            {
                 Ok(index) => break index,
                 Err(iroh_mainline_endpoint_discovery::UdpError::NoServers { .. }) => {
                     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -398,12 +402,17 @@ async fn signed_bootstrap_works_without_rendezvous_announcements() {
             .unwrap();
         // No node has announced a rendezvous peer. Only the trusted record can
         // supply a candidate (discovery does not require it to be responsive).
-        AddrIndex::discover_with_authority(reader.clone(), key.verifying_key().to_bytes())
+        AddrIndex::builder(reader.clone())
+            .list_key(key.verifying_key().to_bytes())
+            .build()
             .await
             .unwrap();
         let other = n0_mainline::SigningKey::from_bytes(&[43; 32]);
         assert!(matches!(
-            AddrIndex::discover_with_authority(reader, other.verifying_key().to_bytes()).await,
+            AddrIndex::builder(reader)
+                .list_key(other.verifying_key().to_bytes())
+                .build()
+                .await,
             Err(iroh_mainline_endpoint_discovery::UdpError::NoServers { .. })
         ));
     })
@@ -413,7 +422,7 @@ async fn signed_bootstrap_works_without_rendezvous_announcements() {
 
 #[tokio::test]
 async fn signed_list_precedes_custom_rendezvous_fallback() {
-    use iroh_mainline_endpoint_discovery::{DiscoveryConfig, ServerList};
+    use iroh_mainline_endpoint_discovery::ServerList;
     use std::net::{Ipv4Addr, SocketAddrV4};
     tokio::time::timeout(Duration::from_secs(30), async {
         let network = n0_mainline::Testnet::new(3).await.unwrap();
@@ -451,12 +460,10 @@ async fn signed_list_precedes_custom_rendezvous_fallback() {
             )
             .await
             .unwrap();
-        let config = DiscoveryConfig {
-            server: None,
-            public_key: Some(key.verifying_key().to_bytes()),
-            rendezvous_hash: Some(hash),
-        };
-        let index = AddrIndex::discover_with_config(node(), config)
+        let index = AddrIndex::builder(node())
+            .list_key(key.verifying_key().to_bytes())
+            .rendezvous_hash(hash)
+            .build()
             .await
             .unwrap();
         let secret = SecretKey::generate();
@@ -464,16 +471,12 @@ async fn signed_list_precedes_custom_rendezvous_fallback() {
         assert!(signed_server.get_local(addr).is_some());
         assert!(fallback_server.get_local(addr).is_none());
         let other = n0_mainline::SigningKey::from_bytes(&[45; 32]);
-        let index = AddrIndex::discover_with_config(
-            node(),
-            DiscoveryConfig {
-                server: None,
-                public_key: Some(other.verifying_key().to_bytes()),
-                rendezvous_hash: Some(hash),
-            },
-        )
-        .await
-        .unwrap();
+        let index = AddrIndex::builder(node())
+            .list_key(other.verifying_key().to_bytes())
+            .rendezvous_hash(hash)
+            .build()
+            .await
+            .unwrap();
         let addr = index.publish(&secret).await.unwrap()[0];
         assert!(fallback_server.get_local(addr).is_some());
     })
@@ -483,21 +486,17 @@ async fn signed_list_precedes_custom_rendezvous_fallback() {
 
 #[tokio::test]
 async fn explicit_server_bypasses_both_discovery_sources() {
-    use iroh_mainline_endpoint_discovery::DiscoveryConfig;
     let server = Server::new(Limits::for_tests());
     let handle = server.attach(test_dht()).await.unwrap();
     let server_addr = v4(loopback(handle.local_addr()));
     let dht = Dht::builder().no_bootstrap().port(0).build().unwrap();
     let index = tokio::time::timeout(
         Duration::from_secs(1),
-        AddrIndex::discover_with_config(
-            dht,
-            DiscoveryConfig {
-                server: Some(server_addr),
-                public_key: Some([42; 32]),
-                rendezvous_hash: Some([91; 20]),
-            },
-        ),
+        AddrIndex::builder(dht)
+            .server(server_addr)
+            .list_key([42; 32])
+            .rendezvous_hash([91; 20])
+            .build(),
     )
     .await
     .unwrap()

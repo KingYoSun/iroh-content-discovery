@@ -10,7 +10,7 @@ use n0_mainline::Dht;
 
 #[derive(Parser)]
 struct Args {
-    /// Index server to test directly, without rendezvous discovery.
+    /// Index server to test directly, without discovery.
     #[arg(long, env = "IROH_ADDR_INDEX")]
     index_server: SocketAddrV4,
 }

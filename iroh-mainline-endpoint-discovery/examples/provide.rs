@@ -68,10 +68,11 @@ async fn main() -> Result<()> {
     if !dht.bootstrapped().await? {
         bail_any!("DHT bootstrap failed");
     }
-    let index = match cli.index_server {
-        Some(server) => AddrIndex::udp(dht.clone(), server).await?,
-        None => AddrIndex::discover(dht.clone()).await?,
-    };
+    let mut builder = AddrIndex::builder(dht.clone()).n0_defaults();
+    if let Some(server) = cli.index_server {
+        builder = builder.server(server);
+    }
+    let index = builder.build().await?;
     let publisher = Publisher::new(endpoint.secret_key().clone(), dht.clone(), index);
     for (_, hash) in &entries {
         publisher.add_infohash(infohash(hash));

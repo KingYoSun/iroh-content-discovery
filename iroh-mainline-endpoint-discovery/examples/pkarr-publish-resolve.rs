@@ -117,10 +117,11 @@ fn infohash(hash: Hash) -> Id {
 }
 
 async fn address_index(dht: &Dht, server: Option<SocketAddrV4>) -> Result<AddrIndex> {
-    Ok(match server {
-        Some(server) => AddrIndex::udp(dht.clone(), server).await?,
-        None => AddrIndex::discover(dht.clone()).await?,
-    })
+    let mut builder = AddrIndex::builder(dht.clone()).n0_defaults();
+    if let Some(server) = server {
+        builder = builder.server(server);
+    }
+    Ok(builder.build().await?)
 }
 
 #[derive(Debug)]

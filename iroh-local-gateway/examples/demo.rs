@@ -12,7 +12,7 @@ use iroh::{Endpoint, address_lookup::memory::MemoryLookup, endpoint::presets, pr
 use iroh_blobs::{BlobsProtocol, store::fs::FsStore};
 use iroh_local_gateway::Gateway;
 use iroh_mainline_endpoint_discovery::{
-    AddrIndex, BLAKE3_DOMAIN, DiscoveryConfig, PKARR_DOMAIN, PkarrPublisher, Publisher, Resolver,
+    AddrIndex, BLAKE3_DOMAIN, PKARR_DOMAIN, PkarrPublisher, Publisher, Resolver,
     infohash_from_blake3, pkarr_name,
 };
 use n0_mainline::{Dht, SigningKey, Testnet};
@@ -32,7 +32,7 @@ struct Args {
     /// Use an isolated local DHT, server, and iroh discovery instead of public services.
     #[arg(long)]
     local_testnet: bool,
-    /// Explicit public index server IPv4:port; otherwise discover index servers through Mainline.
+    /// Explicit public index server IPv4:port; otherwise use the servers listed by n0.
     #[arg(long, env = "IROH_ADDR_INDEX", conflicts_with = "local_testnet")]
     index_server: Option<SocketAddrV4>,
 }
@@ -92,12 +92,16 @@ async fn main() -> Result<()> {
         .as_ref()
         .map(|server| SocketAddrV4::new(Ipv4Addr::LOCALHOST, server.local_addr().port()))
         .or(args.index_server);
-    let config = DiscoveryConfig {
-        server: server_addr,
-        ..Default::default()
+    let index_builder = |dht: Dht| {
+        let builder = AddrIndex::builder(dht).n0_defaults();
+        match server_addr {
+            Some(server) => builder.server(server),
+            None => builder,
+        }
     };
     let provider_dht = node()?;
-    let index = AddrIndex::discover_with_config(provider_dht.clone(), config.clone())
+    let index = index_builder(provider_dht.clone())
+        .build()
         .await
         .context(
             "index server discovery failed; supply --index server IP:PORT for an available public index server",
@@ -130,7 +134,8 @@ async fn main() -> Result<()> {
         Endpoint::bind(presets::N0).await?
     };
     let gateway_dht = node()?;
-    let index = AddrIndex::discover_with_config(gateway_dht.clone(), config)
+    let index = index_builder(gateway_dht.clone())
+        .build()
         .await
         .context("gateway index server discovery failed")?;
     let gateway = Gateway::new(client.clone(), Resolver::new(gateway_dht, index));

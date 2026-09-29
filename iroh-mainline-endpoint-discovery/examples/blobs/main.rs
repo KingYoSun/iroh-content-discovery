@@ -53,16 +53,15 @@ async fn main() -> Result<()> {
     if !dht.bootstrapped().await? {
         bail_any!("DHT bootstrap failed");
     }
-    let index = match server {
+    let mut builder = AddrIndex::builder(dht.clone()).n0_defaults();
+    match server {
         Some(server) => {
             println!("Using address index server: {server}");
-            AddrIndex::udp(dht.clone(), server).await?
+            builder = builder.server(server);
         }
-        None => {
-            println!("Discovering address index servers through Mainline...");
-            AddrIndex::discover(dht.clone()).await?
-        }
-    };
+        None => println!("Finding address index servers from the n0 list..."),
+    }
+    let index = builder.build().await?;
     println!("Publishing the endpoint record and announcing the blob...");
     let publisher = Publisher::new(provider_ep.secret_key().clone(), dht.clone(), index.clone());
     publisher.add_infohash(infohash);

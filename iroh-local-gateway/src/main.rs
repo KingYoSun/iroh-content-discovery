@@ -5,19 +5,20 @@ mod background;
 
 use std::{
     net::{SocketAddr, SocketAddrV4},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use data_encoding::HEXLOWER_PERMISSIVE;
 use iroh::endpoint::presets;
 use iroh_local_gateway::{Gateway, validate_listen_addr};
-use iroh_mainline_endpoint_discovery::{AddrIndex, DiscoveryConfig, Resolver};
-use n0_mainline::Dht;
-use tracing::info;
-use udp_addr_index_proto::RENDEZVOUS_INFOHASH;
+use iroh_mainline_endpoint_discovery::{
+    AddrIndex, AddrIndexBuilder, Resolver, decode_signed_packet, encode_signed_packet,
+};
+use n0_mainline::{Dht, MutableItem};
+use tracing::{info, warn};
 
 #[derive(Parser)]
 #[command(about = "Serve local content at /blake3/<z32> and Pkarr redirects at /pkarr/<key>")]
@@ -31,10 +32,11 @@ struct Args {
     /// Address index server to use instead of discovering one.
     #[arg(long, env = "IROH_ADDR_INDEX")]
     index_server: Option<SocketAddrV4>,
-    /// Pkarr public key of the trusted server list, as z-base-32 or 64 hex digits.
+    /// Pkarr public key of the trusted server list, as z-base-32 or 64 hex digits;
+    /// defaults to the list maintained by n0.
     #[arg(long, env = "IROH_ADDR_INDEX_LIST_KEY", value_parser = parse_list_key)]
     index_list_key: Option<[u8; 32]>,
-    /// Rendezvous hash as 40 hex digits; defaults to the protocol hash if no discovery source is set.
+    /// Untrusted rendezvous hash as 40 hex digits, tried when the signed list yields nothing.
     #[arg(long, env = "IROH_ADDR_INDEX_RENDEZVOUS", value_parser = parse_hex::<20>)]
     rendezvous_hash: Option<[u8; 20]>,
     /// Local Mainline UDP port; zero selects an available port.
@@ -43,15 +45,19 @@ struct Args {
 }
 
 impl Args {
-    fn discovery_config(&self) -> DiscoveryConfig {
-        DiscoveryConfig {
-            server: self.index_server,
-            public_key: self.index_list_key,
-            rendezvous_hash: self.rendezvous_hash.or_else(|| {
-                (self.index_server.is_none() && self.index_list_key.is_none())
-                    .then_some(RENDEZVOUS_INFOHASH)
-            }),
+    /// Configures index discovery from the command line.
+    fn index(&self, dht: Dht) -> AddrIndexBuilder {
+        let mut builder = AddrIndex::builder(dht).n0_defaults();
+        if let Some(server) = self.index_server {
+            builder = builder.server(server);
         }
+        if let Some(key) = self.index_list_key {
+            builder = builder.list_key(key);
+        }
+        if let Some(hash) = self.rendezvous_hash {
+            builder = builder.rendezvous_hash(hash);
+        }
+        builder
     }
 }
 
@@ -115,22 +121,56 @@ async fn serve(
     endpoint: iroh::Endpoint,
     dht: Dht,
 ) -> Result<()> {
-    let config = args.discovery_config();
+    let mut builder = args.index(dht.clone());
+    if let Some(item) = args.state_dir.as_deref().and_then(load_index_list) {
+        builder = builder.fallback_list(item);
+    }
     info!("finding index servers");
     let index = loop {
-        match AddrIndex::discover_with_config(dht.clone(), config.clone()).await {
+        match builder.clone().build().await {
             Ok(index) => break index,
             Err(error) if args.state_dir.is_some() => {
-                tracing::warn!(%error, "index discovery failed; retrying in 20 seconds");
+                warn!(%error, "index discovery failed; retrying in 20 seconds");
                 tokio::time::sleep(Duration::from_secs(20)).await;
             }
             Err(error) => return Err(error.into()),
         }
     };
+    if let Some(state) = &args.state_dir
+        && let Some(item) = index.signed_list().await
+        && let Err(error) = store_index_list(state, &item)
+    {
+        warn!(%error, "cannot store the signed index list");
+    }
     let resolver = Resolver::new(dht, index);
     let gateway = Gateway::new(endpoint, resolver);
     info!(listen = %listener.local_addr()?, "gateway ready");
     gateway.serve(listener, std::future::pending()).await
+}
+
+/// Signed index list from the last successful discovery, used when the
+/// Pkarr record does not resolve.
+///
+/// Stored as a Pkarr signed packet and verified again when read.
+const INDEX_LIST_FILE: &str = "index-list.pkarr";
+
+fn load_index_list(state: &Path) -> Option<MutableItem> {
+    let bytes = std::fs::read(state.join(INDEX_LIST_FILE)).ok()?;
+    let item = decode_signed_packet(&bytes);
+    if item.is_none() {
+        warn!("ignoring stored index list that does not verify");
+    }
+    item
+}
+
+fn store_index_list(state: &Path, item: &MutableItem) -> Result<()> {
+    // Write beside the file and rename, so a crash never leaves half a list.
+    let path = state.join(INDEX_LIST_FILE);
+    let temporary = path.with_extension("tmp");
+    let bytes = encode_signed_packet(item).context("index list is not a Pkarr packet")?;
+    std::fs::write(&temporary, bytes)?;
+    std::fs::rename(temporary, path)?;
+    Ok(())
 }
 
 fn parse_hex<const N: usize>(value: &str) -> Result<[u8; N], String> {
@@ -162,7 +202,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_to_rendezvous_and_preserves_explicit_discovery_sources() {
+    fn defaults_to_the_signed_list_and_preserves_explicit_sources() {
         // Environment-backed options are covered by Clap; test discovery defaults
         // with those bindings removed so the caller's environment cannot affect it.
         use clap::{CommandFactory, FromArgMatches};
@@ -176,14 +216,14 @@ mod tests {
         };
         let key = z32::encode(&[42; 32]);
         let hash = "01".repeat(20);
-        let default = parse(vec!["gateway"]).unwrap().discovery_config();
-        assert_eq!(default.rendezvous_hash, Some(RENDEZVOUS_INFOHASH));
-        assert!(default.server.is_none());
-        assert!(default.public_key.is_none());
+        let default = parse(vec!["gateway"]).unwrap();
+        assert!(default.index_list_key.is_none());
+        assert!(default.rendezvous_hash.is_none());
         let curated = parse(vec!["gateway", "--index-list-key", &key]).unwrap();
-        assert!(curated.discovery_config().rendezvous_hash.is_none());
+        assert_eq!(curated.index_list_key, Some([42; 32]));
         let custom = parse(vec!["gateway", "--rendezvous-hash", &hash]).unwrap();
-        assert_eq!(custom.discovery_config().rendezvous_hash, Some([1; 20]));
+        assert!(custom.index_list_key.is_none());
+        assert_eq!(custom.rendezvous_hash, Some([1; 20]));
         let both = parse(vec![
             "gateway",
             "--index-list-key",
@@ -191,15 +231,30 @@ mod tests {
             "--rendezvous-hash",
             &hash,
         ])
-        .unwrap()
-        .discovery_config();
-        assert_eq!(both.public_key, Some([42; 32]));
+        .unwrap();
+        assert_eq!(both.index_list_key, Some([42; 32]));
         assert_eq!(both.rendezvous_hash, Some([1; 20]));
-        let direct = parse(vec!["gateway", "--index-server", "127.0.0.1:60125"])
-            .unwrap()
-            .discovery_config();
-        assert_eq!(direct.server, Some("127.0.0.1:60125".parse().unwrap()));
+        let direct = parse(vec!["gateway", "--index-server", "127.0.0.1:60125"]).unwrap();
+        assert_eq!(
+            direct.index_server,
+            Some("127.0.0.1:60125".parse().unwrap())
+        );
         assert!(direct.rendezvous_hash.is_none());
+    }
+
+    #[test]
+    fn stored_index_list_roundtrips() {
+        let state = tempfile::tempdir().unwrap();
+        assert!(load_index_list(state.path()).is_none());
+        let key = n0_mainline::SigningKey::from_bytes(&[42; 32]);
+        let item = MutableItem::new(&key, b"list", 7, None);
+        store_index_list(state.path(), &item).unwrap();
+        assert_eq!(load_index_list(state.path()), Some(item));
+        let path = state.path().join(INDEX_LIST_FILE);
+        let mut bytes = std::fs::read(&path).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        std::fs::write(&path, bytes).unwrap();
+        assert!(load_index_list(state.path()).is_none());
     }
 
     #[test]
