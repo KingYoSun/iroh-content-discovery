@@ -29,19 +29,32 @@ pub(crate) const INDEX_TTL: Duration = Duration::from_secs(60 * 60);
 pub(crate) const RESTART_JITTER: Duration = Duration::from_secs(60);
 
 /// A record that an index server stored.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Record {
     /// Our address as Mainline reported it when publishing, if it knew it.
     pub(crate) public: Option<SocketAddrV4>,
     /// Socket the server stored the record under.
     pub(crate) mapping: SocketAddrV4,
     pub(crate) at: Instant,
+    /// The servers in use when it was published.
+    pub(crate) servers: BTreeSet<SocketAddrV4>,
 }
 
 impl Record {
-    /// Returns whether readers can resolve an announcement from `public`.
-    fn is_live(&self, public: Option<SocketAddrV4>, now: Instant) -> bool {
-        self.public == public && now.saturating_duration_since(self.at) < INDEX_TTL
+    /// Returns whether readers asking `servers` can resolve an announcement
+    /// from `public`.
+    ///
+    /// Readers ask the servers discovery currently names, so a record on
+    /// servers that are no longer among them does not help.
+    fn is_live(
+        &self,
+        public: Option<SocketAddrV4>,
+        servers: &BTreeSet<SocketAddrV4>,
+        now: Instant,
+    ) -> bool {
+        self.public == public
+            && (self.servers == *servers || !self.servers.is_disjoint(servers))
+            && now.saturating_duration_since(self.at) < INDEX_TTL
     }
 }
 
@@ -55,6 +68,8 @@ impl Record {
 #[derive(Debug, Default)]
 pub(crate) struct IndexKeeper {
     record: watch::Sender<Option<Record>>,
+    /// The servers in use, as the keeper last saw them.
+    servers: std::sync::Mutex<BTreeSet<SocketAddrV4>>,
     /// Set when an announcement saw an address the record is not for.
     reported: Notify,
 }
@@ -62,7 +77,7 @@ pub(crate) struct IndexKeeper {
 impl IndexKeeper {
     /// Returns the socket of the current record.
     pub(crate) fn mapping(&self) -> Option<SocketAddrV4> {
-        self.record.borrow().map(|record| record.mapping)
+        self.record.borrow().as_ref().map(|record| record.mapping)
     }
 
     /// Subscribes to successful publications.
@@ -70,11 +85,13 @@ impl IndexKeeper {
         self.record.subscribe()
     }
 
-    /// Returns whether an index server holds our record for `public`.
+    /// Returns whether a server in use holds our record for `public`.
     pub(crate) fn is_live(&self, public: Option<SocketAddrV4>, now: Instant) -> bool {
+        let servers = self.servers.lock().expect("poisoned");
         self.record
             .borrow()
-            .is_some_and(|record| record.is_live(public, now))
+            .as_ref()
+            .is_some_and(|record| record.is_live(public, &servers, now))
     }
 
     /// Reports the address Mainline sees us at, without waiting.
@@ -84,6 +101,7 @@ impl IndexKeeper {
         if self
             .record
             .borrow()
+            .as_ref()
             .is_none_or(|record| record.public != public)
         {
             self.reported.notify_one();
@@ -105,7 +123,6 @@ impl IndexKeeper {
         A: Future<Output = Option<SocketAddrV4>>,
         P: Future<Output = Result<SocketAddrV4>>,
     {
-        let mut published_to = None;
         let mut failed: Option<Instant> = None;
         loop {
             if !*active.borrow_and_update() {
@@ -116,17 +133,24 @@ impl IndexKeeper {
             }
             let public = address().await;
             let current_servers = servers.borrow_and_update().clone();
-            let record = *self.record.borrow();
+            // Once the servers change, a record only on the old ones stops
+            // counting as live, whether or not publishing to the new ones works.
+            *self.servers.lock().expect("poisoned") = current_servers.clone();
+            let record = self.record.borrow().clone();
             let now = Instant::now();
-            let due = published_to.as_ref() != Some(&current_servers)
-                || record.is_none_or(|record| {
-                    record.public != public || now >= record.at + INDEX_REFRESH
-                });
+            let due = record.as_ref().is_none_or(|record| {
+                record.servers != current_servers
+                    || record.public != public
+                    || now >= record.at + INDEX_REFRESH
+            });
             let backing_off = failed.is_some_and(|failed| now < failed + RETRY);
             if due && !backing_off {
                 match publish().await {
                     Ok(mapping) => {
-                        if record.is_some_and(|record| record.public != public) {
+                        if record
+                            .as_ref()
+                            .is_some_and(|record| record.public != public)
+                        {
                             info!(?public, %mapping, "Mainline address changed; republished index record");
                         } else {
                             debug!(?public, %mapping, "published index record");
@@ -135,8 +159,8 @@ impl IndexKeeper {
                             public,
                             mapping,
                             at: now,
+                            servers: current_servers,
                         }));
-                        published_to = Some(current_servers);
                         failed = None;
                     }
                     Err(err) => {
@@ -149,7 +173,11 @@ impl IndexKeeper {
             // decides when to try again; waking for the refresh would spin.
             let next = match failed {
                 Some(failed) => Some(failed + RETRY),
-                None => self.record.borrow().map(|record| record.at + INDEX_REFRESH),
+                None => self
+                    .record
+                    .borrow()
+                    .as_ref()
+                    .map(|record| record.at + INDEX_REFRESH),
             };
             tokio::select! {
                 _ = self.reported.notified() => {}
@@ -301,7 +329,11 @@ mod tests {
         }
 
         fn record_public(&self) -> Option<SocketAddrV4> {
-            self.keeper.record.borrow().and_then(|record| record.public)
+            self.keeper
+                .record
+                .borrow()
+                .as_ref()
+                .and_then(|record| record.public)
         }
     }
 
@@ -347,6 +379,25 @@ mod tests {
         assert_eq!(harness.record_public(), Some(addr(2)));
         assert!(harness.keeper.is_live(Some(addr(2)), Instant::now()));
         assert!(!harness.keeper.is_live(Some(addr(1)), Instant::now()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_record_on_replaced_servers_is_not_live() {
+        let harness = Harness::start(true);
+        settle().await;
+        assert!(harness.keeper.is_live(Some(addr(1)), Instant::now()));
+        // Discovery moves to a new server, which does not take the record.
+        harness.failing.store(true, Ordering::SeqCst);
+        harness.servers.send_replace(BTreeSet::from([addr(60126)]));
+        settle().await;
+        assert_eq!(harness.publishes(), 2);
+        assert!(!harness.keeper.is_live(Some(addr(1)), Instant::now()));
+        // Keeping one of the old servers keeps the record useful.
+        harness
+            .servers
+            .send_replace(BTreeSet::from([addr(60125), addr(60126)]));
+        settle().await;
+        assert!(harness.keeper.is_live(Some(addr(1)), Instant::now()));
     }
 
     #[tokio::test(start_paused = true)]
@@ -433,6 +484,8 @@ mod tests {
             public: Some(public),
             mapping: public,
             at: Instant::now(),
+            // The keeper in these tests runs without servers.
+            servers: BTreeSet::new(),
         }));
     }
 
