@@ -1,4 +1,4 @@
-//! Periodically publish an endpoint identity and announce Mainline infohashes.
+//! Announce Mainline infohashes, keeping the endpoint's index record current.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -16,17 +16,38 @@ use tokio::{
     time::Instant,
 };
 
-use crate::AddrIndex;
+use crate::{
+    AddrIndex,
+    index_keeper::{IndexKeeper, announce_indexed},
+};
 use tracing::{info, warn};
 
-/// How often to renew Mainline announcements and address-index values.
+/// How often to renew Mainline announcements.
 pub const REFRESH: Duration = Duration::from_secs(10 * 60);
+/// Age after which the address-index record is republished.
+///
+/// Index servers keep a record for an hour by default, so this leaves room for
+/// failed attempts.
+pub const INDEX_REFRESH: Duration = Duration::from_secs(30 * 60);
 /// Minimum spacing between announcement starts.
 pub const ANNOUNCE_SPACING: Duration = Duration::from_millis(250);
 /// Delay before retrying a failed publication or announcement.
 pub const RETRY: Duration = Duration::from_secs(30);
 
 /// Keeps Mainline announcements and one signed endpoint value current.
+///
+/// Each infohash is announced on its own timer, every [`REFRESH`] with some
+/// jitter. The index record is kept on a separate schedule while infohashes
+/// are registered: it is republished when older than [`INDEX_REFRESH`], when
+/// discovery finds other index servers, and when an announcement finds that
+/// Mainline sees us at another address. It goes to all index servers and
+/// counts as published once one stored it, since readers ask them all. A
+/// failed publication is retried after [`RETRY`].
+///
+/// An announcement goes ahead only if an index server holds our record for
+/// the address Mainline sees us at, since readers could not resolve it
+/// otherwise. If none does, it waits for the next successful publication and
+/// then resumes after a random delay of up to a minute.
 ///
 /// Publishing runs in a background task owned by this handle. Dropping the
 /// handle stops it, and the announcements expire from the DHT soon after.
@@ -43,7 +64,11 @@ struct State {
     index: AddrIndex,
     entries: Mutex<HashSet<Id>>,
     notify: Notify,
+    /// Socket of the index record once every registered hash is announced.
     published: watch::Sender<Option<SocketAddrV4>>,
+    keeper: IndexKeeper,
+    /// Whether any infohash is registered, which the keeper publishes for.
+    active: watch::Sender<bool>,
 }
 
 impl Publisher {
@@ -59,11 +84,10 @@ impl Publisher {
             entries: Mutex::new(HashSet::new()),
             notify: Notify::new(),
             published: watch::channel(None).0,
+            keeper: IndexKeeper::default(),
+            active: watch::channel(false).0,
         });
-        let task = task::spawn({
-            let state = state.clone();
-            async move { state.run().await }
-        });
+        let task = task::spawn(state.clone().run());
         Self {
             state,
             _task: Arc::new(AbortOnDropHandle::new(task)),
@@ -133,34 +157,21 @@ impl Publisher {
 }
 
 impl State {
-    /// Runs independent announcement workers and an address-index refresh worker.
-    async fn run(&self) {
-        let (mapping_tx, mut mapping_rx) = watch::channel(None);
-        let publish = async {
-            loop {
-                // Avoid publishing an unused endpoint before any hashes are added.
-                if self.infohashes().is_empty() {
-                    tokio::time::sleep(RETRY).await;
-                    continue;
-                }
-                let delay = match self.publish_index().await {
-                    Ok(mapping) => {
-                        mapping_tx.send_replace(Some(mapping));
-                        REFRESH
-                    }
-                    Err(err) => {
-                        warn!(%err, "address-index publication failed");
-                        RETRY
-                    }
-                };
-                tokio::time::sleep(delay).await;
-            }
-        };
-        // Start the index worker only once there is work, without polling latency.
-        while self.infohashes().is_empty() {
-            self.notify.notified().await;
-        }
-        tokio::pin!(publish);
+    /// Runs the index keeper and one announcement worker per registered infohash.
+    async fn run(self: Arc<Self>) {
+        let keeper = self.keeper.run(
+            self.active.subscribe(),
+            self.index.servers(),
+            || async {
+                // Bootstrapping tells Mainline our address, so the first
+                // record is published for the address announcements will see.
+                let _ = self.dht.bootstrapped().await;
+                public_address(&self.dht).await
+            },
+            || self.publish_index(),
+        );
+        tokio::pin!(keeper);
+        let mut records = self.keeper.subscribe();
         let (tx, mut rx) = mpsc::unbounded_channel();
         let mut workers = HashMap::new();
         let mut announced = HashSet::new();
@@ -168,30 +179,52 @@ impl State {
         let permits = Arc::new(Semaphore::new(3));
         loop {
             let entries: HashSet<_> = self.infohashes().into_iter().collect();
+            self.active.send_if_modified(|active| {
+                let changed = *active == entries.is_empty();
+                *active = !entries.is_empty();
+                changed
+            });
             workers.retain(|hash, _| entries.contains(hash));
             announced.retain(|hash| entries.contains(hash));
             for hash in entries.iter().copied() {
                 workers.entry(hash).or_insert_with(|| {
-                    let dht = self.dht.clone();
-                    let mut mapping = mapping_rx.clone();
+                    let state = self.clone();
                     let tx = tx.clone();
                     let pacing = pacing.clone();
                     let permits = permits.clone();
                     AbortOnDropHandle::new(task::spawn(async move {
-                        // The address must be indexed before advertising it in the DHT.
-                        while mapping.borrow().is_none() {
-                            if mapping.changed().await.is_err() {
-                                return;
-                            }
-                        }
                         repeat_announcement(|| async {
-                            let _permit = permits.acquire().await.expect("semaphore closed");
-                            {
-                                let mut next = pacing.lock().await;
-                                tokio::time::sleep_until(*next).await;
-                                *next = Instant::now() + ANNOUNCE_SPACING;
-                            }
-                            let result = announce(&dht, hash).await;
+                            let result = announce_indexed(
+                                &state.keeper,
+                                || async {
+                                    let permit = permits
+                                        .clone()
+                                        .acquire_owned()
+                                        .await
+                                        .expect("semaphore closed");
+                                    let mut next = pacing.lock().await;
+                                    tokio::time::sleep_until(*next).await;
+                                    *next = Instant::now() + ANNOUNCE_SPACING;
+                                    permit
+                                },
+                                || async {
+                                    // Finding the closest nodes primes their tokens
+                                    // for the announce, and their replies tell us
+                                    // the address the announce will store.
+                                    state.dht.get_closest_nodes(hash).await.with_context(|_| {
+                                        format!("get_closest_nodes for {hash}")
+                                    })?;
+                                    Ok(public_address(&state.dht).await)
+                                },
+                                || async {
+                                    state.dht.announce_peer(hash, None).await.with_context(
+                                        |_| format!("announce_peer infohash {hash}"),
+                                    )?;
+                                    info!(infohash = %hash, "renewed Mainline announcement");
+                                    Ok(())
+                                },
+                            )
+                            .await;
                             match &result {
                                 Ok(()) => {
                                     let _ = tx.send(hash);
@@ -205,12 +238,12 @@ impl State {
                 });
             }
             if !entries.is_empty() && entries.is_subset(&announced) {
-                self.published.send_replace(*mapping_rx.borrow());
+                self.published.send_replace(self.keeper.mapping());
             }
             tokio::select! {
-                _ = &mut publish => unreachable!("index publisher runs until cancelled"),
+                () = &mut keeper => return,
                 _ = self.notify.notified() => {},
-                _ = mapping_rx.changed() => {},
+                _ = records.changed() => {},
                 Some(hash) = rx.recv() => { announced.insert(hash); },
             }
         }
@@ -239,16 +272,9 @@ impl State {
     }
 }
 
-async fn announce(dht: &Dht, infohash: Id) -> Result<()> {
-    // Prime token-bearing closest nodes before the announce PUT.
-    dht.get_closest_nodes(infohash)
-        .await
-        .with_context(|_| format!("get_closest_nodes for {infohash}"))?;
-    dht.announce_peer(infohash, None)
-        .await
-        .with_context(|_| format!("announce_peer infohash {infohash}"))?;
-    info!(%infohash, "renewed Mainline announcement");
-    Ok(())
+/// Returns the address Mainline sees us at, if it knows it yet.
+async fn public_address(dht: &Dht) -> Option<SocketAddrV4> {
+    dht.info().await.ok()?.public_address()
 }
 
 /// Each worker owns its timer; neither another hash nor a mapping change resets it.

@@ -2,14 +2,20 @@
 
 use n0_error::e;
 use n0_future::StreamExt;
+use n0_future::task::{self, AbortOnDropHandle};
 use n0_mainline::Dht;
-use std::{collections::HashSet, net::SocketAddrV4, sync::Arc, time::Duration};
-use tokio::sync::Mutex;
+use std::{
+    collections::{BTreeSet, HashSet},
+    net::SocketAddrV4,
+    sync::Arc,
+    time::Duration,
+};
+use tokio::sync::{Mutex, watch};
 
 use iroh_base::SecretKey;
 
-use crate::{SignedRecord, UdpClient, UdpError, udp::DEFAULT_TIMEOUT};
-use tracing::debug;
+use crate::{SignedRecord, UdpClient, UdpError, lookup_cache::LookupCache, udp::DEFAULT_TIMEOUT};
+use tracing::{debug, info, warn};
 
 /// Pkarr key of the index server list maintained by n0.
 ///
@@ -20,6 +26,14 @@ pub const DEFAULT_INDEX_LIST_KEY: [u8; 32] = [
     191, 136, 19, 206, 0, 147, 105, 54, 43, 148, 59, 158, 122, 233, 214, 67, 47, 52, 190, 154, 118,
     20, 212, 117, 226, 54, 65, 95, 30, 141, 1, 29,
 ];
+
+/// How often discovery looks for the current index servers.
+const DISCOVERY_REFRESH: Duration = Duration::from_secs(10 * 60);
+/// Delay before retrying a failed discovery; the previous servers stay in use.
+const DISCOVERY_RETRY: Duration = Duration::from_secs(30);
+
+/// How long [`AddrIndexBuilder::n0_defaults`] remembers lookups.
+pub const DEFAULT_LOOKUP_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 
 /// Configures where an [`AddrIndex`] finds its servers.
 ///
@@ -34,6 +48,7 @@ pub struct AddrIndexBuilder {
     servers: HashSet<SocketAddrV4>,
     sources: Sources,
     timeout: Duration,
+    lookup_cache: Option<Duration>,
 }
 
 /// Discovery sources, tried in order.
@@ -51,9 +66,12 @@ impl AddrIndexBuilder {
         self
     }
 
-    /// Discovers servers from the list maintained by n0, [`DEFAULT_INDEX_LIST_KEY`].
+    /// Uses the servers listed by n0 and caches lookups.
+    ///
+    /// Sets [`DEFAULT_INDEX_LIST_KEY`] and [`DEFAULT_LOOKUP_CACHE_TTL`].
     pub fn n0_defaults(self) -> Self {
         self.list_key(DEFAULT_INDEX_LIST_KEY)
+            .lookup_cache(DEFAULT_LOOKUP_CACHE_TTL)
     }
 
     /// Discovers servers from the Pkarr list signed by `key`.
@@ -81,6 +99,16 @@ impl AddrIndexBuilder {
         self
     }
 
+    /// Remembers the endpoints found at a socket for `ttl`.
+    ///
+    /// Sockets without a record are remembered for at most thirty seconds, so
+    /// new publishers show up quickly, and failed lookups are not remembered.
+    /// Concurrent lookups of one socket share a request. Off by default.
+    pub fn lookup_cache(mut self, ttl: Duration) -> Self {
+        self.lookup_cache = Some(ttl);
+        self
+    }
+
     /// Sets the deadline for each publish or lookup, [`DEFAULT_TIMEOUT`] by default.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
@@ -89,31 +117,59 @@ impl AddrIndexBuilder {
 
     /// Attaches to the DHT socket and, unless servers were given, discovers them.
     ///
-    /// Discovery keeps at most two servers, gives each lookup thirty seconds,
-    /// and refreshes on use after ten minutes, retaining the highest signed
-    /// sequence for the index's lifetime. Addresses are candidates; they do
-    /// not prove availability.
+    /// Fails if the first discovery finds no servers. Discovery then repeats
+    /// in the background every ten minutes, while the index or a clone of it
+    /// is alive; a failed refresh keeps the previous servers and retries after
+    /// thirty seconds. It keeps at most two servers, gives each lookup thirty
+    /// seconds, and retains the highest signed sequence for the index's
+    /// lifetime. Addresses are candidates; they do not prove availability.
     pub async fn build(self) -> Result<AddrIndex, UdpError> {
         debug!(servers = ?self.servers, sources = ?self.sources, "configuring index server discovery");
+        let cache = self.lookup_cache.map(|ttl| Arc::new(LookupCache::new(ttl)));
         if !self.servers.is_empty() {
             let client = UdpClient::attach_with_timeout(self.dht, self.timeout).await?;
-            client.replace_servers(self.servers).await?;
-            return Ok(AddrIndex::from_udp(client));
+            client.replace_servers(self.servers.clone()).await?;
+            // The servers never change, so the sender can go.
+            let (_, servers) = watch::channel(self.servers.into_iter().collect());
+            return Ok(AddrIndex {
+                client,
+                discovery: None,
+                cache,
+                servers,
+                _refresh: None,
+            });
         }
         if self.sources.list_key.is_none() && self.sources.rendezvous_hash.is_none() {
             return Err(e!(UdpError::NoServers));
         }
         let client = UdpClient::attach_with_timeout(self.dht.clone(), self.timeout).await?;
-        let index = AddrIndex {
+        let discovery = Arc::new(Discovery {
+            dht: self.dht,
+            sources: self.sources,
+            state: Mutex::new(DiscoveryState::default()),
+        });
+        let (servers_tx, servers) = watch::channel(BTreeSet::new());
+        discovery.refresh(&client, &servers_tx).await?;
+        let refresh = task::spawn({
+            let discovery = discovery.clone();
+            let client = client.clone();
+            async move {
+                loop {
+                    tokio::time::sleep(DISCOVERY_REFRESH).await;
+                    while let Err(err) = discovery.refresh(&client, &servers_tx).await {
+                        warn!(%err, "index server discovery failed; keeping the previous servers");
+                        tokio::time::sleep(DISCOVERY_RETRY).await;
+                    }
+                }
+            }
+        });
+        Ok(AddrIndex {
             client,
-            discovery: Some(Arc::new(Discovery {
-                dht: self.dht,
-                sources: self.sources,
-                state: Mutex::new(DiscoveryState::default()),
-            })),
-        };
-        index.refresh_servers().await?;
-        Ok(index)
+            discovery: Some(discovery),
+            cache,
+            servers,
+            _refresh: Some(Arc::new(AbortOnDropHandle::new(refresh))),
+        })
     }
 }
 
@@ -122,6 +178,11 @@ impl AddrIndexBuilder {
 pub struct AddrIndex {
     client: UdpClient,
     discovery: Option<Arc<Discovery>>,
+    cache: Option<Arc<LookupCache>>,
+    /// Servers in use, updated by each discovery refresh.
+    servers: watch::Receiver<BTreeSet<SocketAddrV4>>,
+    /// Background discovery, stopped when the last clone is dropped.
+    _refresh: Option<Arc<AbortOnDropHandle<()>>>,
 }
 
 #[derive(Debug)]
@@ -133,7 +194,6 @@ struct Discovery {
 
 #[derive(Debug, Default)]
 struct DiscoveryState {
-    refreshed: Option<tokio::time::Instant>,
     signed: Option<n0_mainline::MutableItem>,
 }
 
@@ -155,52 +215,37 @@ impl DiscoveryState {
     }
 }
 
-impl AddrIndex {
-    /// Starts configuring an index on a Mainline node's UDP socket, with no servers.
-    pub fn builder(dht: Dht) -> AddrIndexBuilder {
-        AddrIndexBuilder {
-            dht,
-            servers: HashSet::new(),
-            sources: Sources::default(),
-            timeout: DEFAULT_TIMEOUT,
-        }
-    }
-
-    /// Uses one server directly, without discovery.
-    pub async fn udp(dht: Dht, server: SocketAddrV4) -> Result<Self, UdpError> {
-        Self::builder(dht).server(server).build().await
-    }
-
-    /// Discovers servers with [`AddrIndexBuilder::n0_defaults`].
-    pub async fn discover(dht: Dht) -> Result<Self, UdpError> {
-        Self::builder(dht).n0_defaults().build().await
-    }
-
-    async fn refresh_servers(&self) -> Result<(), UdpError> {
-        let Some(discovery) = &self.discovery else {
-            return Ok(());
-        };
-        let mut state = discovery.state.lock().await;
-        if state
-            .refreshed
-            .is_some_and(|time| time.elapsed() < Duration::from_secs(600))
-        {
-            return Ok(());
-        }
+impl Discovery {
+    /// Finds the current servers and hands them to `client`.
+    ///
+    /// Tries the signed list, then the stored copy, then rendezvous. On
+    /// failure, the servers in use stay unchanged.
+    async fn refresh(
+        &self,
+        client: &UdpClient,
+        servers: &watch::Sender<BTreeSet<SocketAddrV4>>,
+    ) -> Result<(), UdpError> {
         let signed_lookup = async {
-            let Some(key) = discovery.sources.list_key else {
-                return Ok::<_, UdpError>(());
+            let Some(key) = self.sources.list_key else {
+                return Ok::<_, UdpError>(Vec::new());
             };
-            let mut stream = discovery.dht.get_mutable(&key, None, None).await?;
+            let mut stream = self.dht.get_mutable(&key, None, None).await?;
+            let mut items = Vec::new();
             while let Some(item) = stream.next().await {
-                state.accept(item);
+                items.push(item);
             }
-            Ok(())
+            Ok(items)
         };
         let signed_result = tokio::time::timeout(Duration::from_secs(30), signed_lookup).await;
+        let mut state = self.state.lock().await;
+        if let Ok(Ok(items)) = &signed_result {
+            for item in items {
+                state.accept(item.clone());
+            }
+        }
         if state.signed.is_none()
-            && let Some(item) = &discovery.sources.fallback_list
-            && discovery.sources.list_key.as_ref() == Some(item.key())
+            && let Some(item) = &self.sources.fallback_list
+            && self.sources.list_key.as_ref() == Some(item.key())
         {
             debug!(
                 sequence = item.seq(),
@@ -208,18 +253,22 @@ impl AddrIndex {
             );
             state.accept(item.clone());
         }
-        debug!(?signed_result, "signed index-list lookup completed");
+        debug!(
+            found = matches!(signed_result, Ok(Ok(_))),
+            "signed index-list lookup completed"
+        );
         let mut peers = state
             .signed
             .as_ref()
             .and_then(|item| crate::ServerList::decode(item.value(), item.key()))
             .map(|list| list.addresses().iter().copied().collect::<HashSet<_>>())
             .unwrap_or_default();
+        drop(state);
         if peers.is_empty() {
-            if let Some(hash) = discovery.sources.rendezvous_hash {
+            if let Some(hash) = self.sources.rendezvous_hash {
                 debug!(infohash = %crate::infohash_hex(&hash), "discovering index servers through Mainline rendezvous");
                 let lookup = async {
-                    let mut stream = discovery.dht.get_peers(hash.into()).await?;
+                    let mut stream = self.dht.get_peers(hash.into()).await?;
                     while let Some(batch) = stream.next().await {
                         for peer in batch {
                             if peer.port() != 0
@@ -250,9 +299,45 @@ impl AddrIndex {
             return Err(e!(UdpError::NoServers));
         }
         debug!(?peers, "using discovered index servers");
-        self.client.replace_servers(peers).await?;
-        state.refreshed = Some(tokio::time::Instant::now());
+        client.replace_servers(peers.clone()).await?;
+        let peers: BTreeSet<_> = peers.into_iter().collect();
+        servers.send_if_modified(|current| {
+            let changed = *current != peers;
+            if changed {
+                info!(servers = ?peers, "index servers changed");
+                *current = peers;
+            }
+            changed
+        });
         Ok(())
+    }
+}
+
+impl AddrIndex {
+    /// Starts configuring an index on a Mainline node's UDP socket, with no servers.
+    pub fn builder(dht: Dht) -> AddrIndexBuilder {
+        AddrIndexBuilder {
+            dht,
+            servers: HashSet::new(),
+            sources: Sources::default(),
+            timeout: DEFAULT_TIMEOUT,
+            lookup_cache: None,
+        }
+    }
+
+    /// Uses one server directly, without discovery.
+    pub async fn udp(dht: Dht, server: SocketAddrV4) -> Result<Self, UdpError> {
+        Self::builder(dht).server(server).build().await
+    }
+
+    /// Discovers servers with [`AddrIndexBuilder::n0_defaults`].
+    pub async fn discover(dht: Dht) -> Result<Self, UdpError> {
+        Self::builder(dht).n0_defaults().build().await
+    }
+
+    /// Returns the servers in use, which change when discovery finds others.
+    pub(crate) fn servers(&self) -> watch::Receiver<BTreeSet<SocketAddrV4>> {
+        self.servers.clone()
     }
 
     /// Returns the signed server list in use, if discovery found one.
@@ -268,6 +353,9 @@ impl AddrIndex {
         Self {
             client,
             discovery: None,
+            cache: None,
+            servers: watch::channel(BTreeSet::new()).1,
+            _refresh: None,
         }
     }
 
@@ -279,7 +367,6 @@ impl AddrIndex {
     ///
     /// Returns the public UDP sockets under which servers stored it.
     pub async fn publish(&self, secret: &SecretKey) -> Result<Vec<SocketAddrV4>, AddrIndexError> {
-        self.refresh_servers().await?;
         let secret = secret.clone();
         self.client
             .publish(move |addr| SignedRecord::sign(&secret, addr).encode())
@@ -290,10 +377,41 @@ impl AddrIndex {
     /// Looks up the endpoints that listed `addr`.
     ///
     /// Records that were not signed for `addr` are discarded, so a record
-    /// republished under another socket is not returned.
+    /// republished under another socket is not returned. With
+    /// [`AddrIndexBuilder::lookup_cache`], a recent result may be returned
+    /// without asking the servers.
     pub async fn lookup(&self, addr: SocketAddrV4) -> Result<Vec<SignedRecord>, AddrIndexError> {
-        self.refresh_servers().await?;
-        let result = self.client.resolve(addr).await?;
+        let Some(cache) = &self.cache else {
+            return self.lookup_uncached(addr).await;
+        };
+        if let Some(records) = cache.get(addr) {
+            debug!(%addr, records = records.len(), "index lookup cache hit");
+            return Ok(records);
+        }
+        let pending = cache.pending(addr);
+        let _pending = pending.lock().await;
+        // A concurrent caller may have finished the same lookup while we waited.
+        if let Some(records) = cache.get(addr) {
+            return Ok(records);
+        }
+        let records = self.lookup_uncached(addr).await?;
+        cache.insert(addr, records.clone());
+        Ok(records)
+    }
+
+    async fn lookup_uncached(
+        &self,
+        addr: SocketAddrV4,
+    ) -> Result<Vec<SignedRecord>, AddrIndexError> {
+        // A valid record is authenticated and bound to `addr`, so the first
+        // one is good enough. A miss still waits for every server.
+        let result = self
+            .client
+            .resolve_first(
+                addr,
+                Box::new(move |value| SignedRecord::decode(value, addr).is_some()),
+            )
+            .await?;
         let received = result.values.len();
         let records: Vec<_> = result
             .values
@@ -432,7 +550,8 @@ mod tests {
                 .addresses()
                 .is_empty()
         );
-        assert!(state.refreshed.is_some());
+        drop(state);
+        assert_eq!(index.servers().borrow().len(), 1);
     }
 
     #[tokio::test]

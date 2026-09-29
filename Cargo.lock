@@ -1811,6 +1811,7 @@ dependencies = [
  "iroh-base",
  "iroh-blobs",
  "iroh-gossip",
+ "lru",
  "n0-error",
  "n0-future",
  "n0-mainline",
