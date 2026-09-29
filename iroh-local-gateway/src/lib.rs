@@ -228,19 +228,7 @@ impl Gateway {
         let infohash = infohash_from_blake3(&blake3::Hash::from_bytes(*hash.as_bytes()));
         let started = Instant::now();
         debug!(infohash = %iroh_mainline_endpoint_discovery::infohash_hex(&infohash), "looking up content provider");
-        let providers = self
-            .0
-            .resolver
-            .resolve_stream(infohash.into())
-            .await
-            .map_err(|error| {
-                debug!(
-                    ?error,
-                    elapsed_ms = started.elapsed().as_millis(),
-                    "provider lookup failed"
-                );
-                HttpError::upstream(error)
-            })?;
+        let providers = self.0.resolver.resolve_stream(infohash.into());
         let provider = filter_verified_providers(self.0.endpoint.clone(), hash, providers)
             .next()
             .await

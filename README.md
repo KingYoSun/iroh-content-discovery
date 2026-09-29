@@ -45,7 +45,9 @@ then return that endpoint as a provider for content it does not serve.
 `Resolver::resolve_stream` yields endpoint IDs as peer batches and index lookups
 complete, translating up to 16 peers at a time so one slow lookup cannot hold up
 the rest. An iroh-blobs downloader can start on the first provider while
-discovery continues. `Resolver::resolve_continuously` begins a new lookup
+discovery continues. The stream is lazy: the Mainline lookup starts only when
+the first item is requested, so providers a caller already knows can be chained
+in front of it without starting a lookup when they suffice. `Resolver::resolve_continuously` begins a new lookup
 whenever the consumer asks for more, and may yield an endpoint it has yielded
 before. `Resolver::resolve` collects a sorted list when a caller wants one.
 

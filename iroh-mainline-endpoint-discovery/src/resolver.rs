@@ -39,15 +39,26 @@ impl Resolver {
 
     /// Yields endpoint IDs as Mainline peers and index records arrive.
     ///
+    /// The stream is lazy: the Mainline lookup starts when the first item is
+    /// requested, so a caller that gets what it needs elsewhere, e.g. from
+    /// providers it already knows, can chain this behind them at no cost.
     /// Up to 16 index lookups run concurrently, so a failed or slow peer does
-    /// not delay other results. Lookup failures are logged and skipped.
-    /// Dropping the stream cancels its pending lookups. The caller should
-    /// impose a deadline.
-    pub async fn resolve_stream(&self, infohash: Id) -> Result<stream::Boxed<EndpointId>> {
-        debug!(%infohash, "starting Mainline provider stream");
-        let mut peers = self.dht.get_peers(infohash).await.context("get_peers")?;
+    /// not delay other results. Lookup failures are logged and skipped, and a
+    /// lookup that cannot start, because the Mainline node is gone, ends the
+    /// stream. Dropping the stream cancels its pending lookups. The caller
+    /// should impose a deadline.
+    pub fn resolve_stream(&self, infohash: Id) -> stream::Boxed<EndpointId> {
+        let dht = self.dht.clone();
         let index = self.index.clone();
         let stream = async_stream::stream! {
+            debug!(%infohash, "starting Mainline provider stream");
+            let mut peers = match dht.get_peers(infohash).await {
+                Ok(peers) => peers,
+                Err(err) => {
+                    debug!(%infohash, %err, "Mainline lookup could not start");
+                    return;
+                }
+            };
             let mut pending_peers = VecDeque::new();
             let mut lookups = FuturesUnordered::new();
             let mut peers_done = false;
@@ -84,7 +95,7 @@ impl Resolver {
                 }
             }
         };
-        Ok(stream.boxed())
+        stream.boxed()
     }
 
     /// Keeps looking for providers until the consumer drops the stream.
@@ -98,16 +109,15 @@ impl Resolver {
         let resolver = self.clone();
         let stream = async_stream::stream! {
             loop {
-                // A lookup only fails to start once the Mainline node is gone,
-                // and it does not come back, so retrying would spin this loop
-                // at full speed forever.
-                let Ok(mut found) = resolver.resolve_stream(infohash).await.inspect_err(|err| {
-                    debug!(%infohash, %err, "Mainline node is gone, ending provider stream");
-                }) else {
-                    break;
-                };
+                let mut found = resolver.resolve_stream(infohash);
                 while let Some(id) = found.next().await {
                     yield id;
+                }
+                // A gone Mainline node does not come back, and its lookups end
+                // at once, so retrying would spin this loop forever.
+                if let Err(err) = resolver.dht.info().await {
+                    debug!(%infohash, %err, "Mainline node is gone, ending provider stream");
+                    break;
                 }
                 tokio::task::yield_now().await;
             }
@@ -156,5 +166,36 @@ impl Resolver {
         let mut out: Vec<_> = endpoint_ids.into_iter().collect();
         out.sort();
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use iroh_base::SecretKey;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn known_providers_chained_first_need_no_lookup() {
+        // Nobody answers at the only bootstrap node, so a started lookup would
+        // take seconds to give up.
+        let dht = Dht::builder()
+            .bootstrap(&["127.0.0.1:9"])
+            .port(0)
+            .build()
+            .unwrap();
+        let index = AddrIndex::udp(dht.clone(), "127.0.0.1:9".parse().unwrap())
+            .await
+            .unwrap();
+        let resolver = Resolver::new(dht, index);
+        let known = SecretKey::generate().public();
+        let infohash = Id::from([7; 20]);
+        let mut providers = stream::iter([known]).chain(resolver.resolve_stream(infohash));
+        let first = tokio::time::timeout(Duration::from_millis(100), providers.next())
+            .await
+            .expect("the known provider waited for a lookup");
+        assert_eq!(first, Some(known));
     }
 }

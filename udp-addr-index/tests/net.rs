@@ -332,7 +332,7 @@ async fn resolver_stream_yields_all_announced_endpoints() {
             reader.clone(),
             AddrIndex::udp(reader, server_addr).await.unwrap(),
         );
-        let mut stream = resolver.resolve_stream(infohash).await.unwrap();
+        let mut stream = resolver.resolve_stream(infohash);
         let mut actual = Vec::new();
         while let Some(id) = stream.next().await {
             actual.push(id);

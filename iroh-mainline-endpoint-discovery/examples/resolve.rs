@@ -58,7 +58,7 @@ async fn resolve(args: Args) -> Result<()> {
     }
     let index = builder.build().await?;
     let resolver = Resolver::new(dht, index);
-    let mut providers = resolver.resolve_stream(infohash.into()).await?;
+    let mut providers = resolver.resolve_stream(infohash.into());
     let mut unique = BTreeSet::new();
     while let Some(endpoint) = providers.next().await {
         if unique.insert(endpoint) {
