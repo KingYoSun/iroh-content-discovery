@@ -261,8 +261,8 @@ impl Gateway {
         }
         let infohash = infohash_from_blake3(&blake3::Hash::from_bytes(*hash.as_bytes()));
         let started = Instant::now();
-        // Providers that recently served this hash go first. The lookup is
-        // lazy, so it only starts if none of them passes its probe.
+        // Providers that recently served this hash go first, so their probes
+        // start before the lookup has found anyone; the fastest probe wins.
         let known = self.0.providers.providers(hash);
         debug!(
             infohash = %iroh_mainline_endpoint_discovery::infohash_hex(&infohash),
@@ -272,7 +272,7 @@ impl Gateway {
         let candidates = stream::iter(
             known
                 .into_iter()
-                .map(|(provider, verified)| (provider, Provenance::Verified { verified })),
+                .map(|(provider, probed)| (provider, Provenance::Verified(probed))),
         )
         .chain(
             self.0
