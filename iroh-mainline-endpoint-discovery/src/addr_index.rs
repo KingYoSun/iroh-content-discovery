@@ -225,6 +225,13 @@ impl Discovery {
         client: &UdpClient,
         servers: &watch::Sender<BTreeSet<SocketAddrV4>>,
     ) -> Result<(), UdpError> {
+        // A lookup while the node is still bootstrapping has barely any peers
+        // to ask, ends at once without an answer, and would report no servers.
+        // Once bootstrapped, this returns immediately.
+        let bootstrapped = self.dht.bootstrapped().await?;
+        if !bootstrapped {
+            debug!("Mainline bootstrap failed; discovering index servers anyway");
+        }
         let signed_lookup = async {
             let Some(key) = self.sources.list_key else {
                 return Ok::<_, UdpError>(Vec::new());
