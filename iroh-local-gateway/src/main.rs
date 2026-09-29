@@ -9,7 +9,6 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result};
 use clap::Parser;
 use data_encoding::HEXLOWER_PERMISSIVE;
 use iroh::endpoint::presets;
@@ -17,6 +16,7 @@ use iroh_local_gateway::{Gateway, validate_listen_addr};
 use iroh_mainline_endpoint_discovery::{
     AddrIndex, AddrIndexBuilder, Resolver, decode_signed_packet, encode_signed_packet,
 };
+use n0_error::{Result, StdResultExt};
 use n0_mainline::{Dht, MutableItem};
 use tracing::{info, warn};
 
@@ -145,7 +145,7 @@ async fn serve(
     let resolver = Resolver::new(dht, index);
     let gateway = Gateway::new(endpoint, resolver);
     info!(listen = %listener.local_addr()?, "gateway ready");
-    gateway.serve(listener, std::future::pending()).await
+    Ok(gateway.serve(listener, std::future::pending()).await?)
 }
 
 /// Signed index list from the last successful discovery, used when the
@@ -167,7 +167,7 @@ fn store_index_list(state: &Path, item: &MutableItem) -> Result<()> {
     // Write beside the file and rename, so a crash never leaves half a list.
     let path = state.join(INDEX_LIST_FILE);
     let temporary = path.with_extension("tmp");
-    let bytes = encode_signed_packet(item).context("index list is not a Pkarr packet")?;
+    let bytes = encode_signed_packet(item).std_context("index list is not a Pkarr packet")?;
     std::fs::write(&temporary, bytes)?;
     std::fs::rename(temporary, path)?;
     Ok(())

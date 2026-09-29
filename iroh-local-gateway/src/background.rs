@@ -1,5 +1,5 @@
 //! Same-user lifecycle files for the installed gateway.
-use anyhow::{Context, Result};
+use n0_error::{Result, StdResultExt};
 use std::{
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
@@ -8,7 +8,7 @@ use std::{
 
 pub fn default_state_dir() -> Result<PathBuf> {
     Ok(dirs::data_local_dir()
-        .context("cannot determine user data directory")?
+        .std_context("cannot determine user data directory")?
         .join("iroh-local-gateway"))
 }
 
@@ -20,7 +20,7 @@ pub fn lock(path: &Path) -> Result<File> {
         .write(true)
         .open(path)?;
     file.try_lock()
-        .context("gateway or launcher already running")?;
+        .std_context("gateway or launcher already running")?;
     Ok(file)
 }
 
@@ -37,7 +37,7 @@ pub fn running(state: &Path) -> Result<bool> {
     match file.try_lock() {
         Ok(()) => Ok(false),
         Err(std::fs::TryLockError::WouldBlock) => Ok(true),
-        Err(e) => Err(e.into()),
+        Err(e) => Err(e).anyerr(),
     }
 }
 

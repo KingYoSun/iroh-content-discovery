@@ -5,8 +5,12 @@ const LABEL: &str = "computer.n0.iroh-local-gateway";
 
 fn domain() -> Result<String> {
     let output = Command::new("/usr/bin/id").arg("-u").output()?;
-    let uid: u32 = String::from_utf8(output.stdout)?.trim().parse()?;
-    anyhow::ensure!(
+    let uid: u32 = String::from_utf8(output.stdout)
+        .anyerr()?
+        .trim()
+        .parse()
+        .anyerr()?;
+    n0_error::ensure_any!(
         uid != 0,
         "install Iroh Gateway for the logged-in user, without sudo"
     );
@@ -25,13 +29,13 @@ fn domain() -> Result<String> {
 }
 fn plist_path() -> Result<PathBuf> {
     Ok(dirs::home_dir()
-        .context("cannot determine home directory")?
+        .std_context("cannot determine home directory")?
         .join("Library/LaunchAgents")
         .join(format!("{LABEL}.plist")))
 }
 fn launchctl(arguments: &[&std::ffi::OsStr]) -> Result<()> {
     let output = Command::new("/bin/launchctl").args(arguments).output()?;
-    anyhow::ensure!(
+    n0_error::ensure_any!(
         output.status.success(),
         "launchctl failed: {}",
         String::from_utf8_lossy(&output.stderr)
@@ -82,9 +86,9 @@ fn definition(executable: &Path, home: &Path, state: &Path, args: Vec<String>) -
     plist::Value::Dictionary(values)
 }
 pub async fn install(state: &Path) -> Result<()> {
-    let home = dirs::home_dir().context("cannot determine home directory")?;
+    let home = dirs::home_dir().std_context("cannot determine home directory")?;
     let executable = std::env::current_exe()?.with_file_name("iroh-local-gateway");
-    anyhow::ensure!(
+    n0_error::ensure_any!(
         executable.is_file(),
         "the daemon must be installed beside its helper"
     );
@@ -92,18 +96,22 @@ pub async fn install(state: &Path) -> Result<()> {
     remove(state).await?;
     std::fs::create_dir_all(state)?;
     let path = plist_path()?;
-    std::fs::create_dir_all(path.parent().context("invalid LaunchAgent path")?)?;
-    definition(&executable, &home, state, super::arguments(state)?).to_file_xml(&path)?;
+    std::fs::create_dir_all(path.parent().std_context("invalid LaunchAgent path")?)?;
+    definition(&executable, &home, state, super::arguments(state)?)
+        .to_file_xml(&path)
+        .anyerr()?;
     launchctl(&["enable".as_ref(), format!("{domain}/{LABEL}").as_ref()])?;
     launchctl(&["bootstrap".as_ref(), domain.as_ref(), path.as_os_str()])?;
     tokio::time::timeout(Duration::from_secs(30), async {
         while !running(state)? || !state.join("ready").exists() {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        Ok::<_, anyhow::Error>(())
+        Ok::<_, n0_error::AnyError>(())
     })
     .await
-    .context("gateway startup timed out; see gateway.log (port 45475 may already be in use)")??;
+    .std_context(
+        "gateway startup timed out; see gateway.log (port 45475 may already be in use)",
+    )??;
     Ok(())
 }
 pub async fn remove(state: &Path) -> Result<()> {
@@ -138,8 +146,8 @@ mod tests {
             home.join("Applications/Iroh Gateway.app/Contents/MacOS/iroh-local-gateway");
         let expected = definition(&executable, home, &state, vec![]);
         let mut bytes = Vec::new();
-        expected.to_writer_xml(&mut bytes)?;
-        let decoded = plist::Value::from_reader(std::io::Cursor::new(bytes))?;
+        expected.to_writer_xml(&mut bytes).anyerr()?;
+        let decoded = plist::Value::from_reader(std::io::Cursor::new(bytes)).anyerr()?;
         assert_eq!(expected, decoded);
         let values = decoded.as_dictionary().unwrap();
         assert_eq!(

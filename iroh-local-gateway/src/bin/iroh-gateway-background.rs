@@ -7,9 +7,9 @@ mod background;
 #[path = "../background_macos.rs"]
 mod macos;
 
-use anyhow::{Context, Result, ensure};
 use background::{default_state_dir, running};
 use clap::{Parser, Subcommand};
+use n0_error::{Result, StdResultExt, ensure_any};
 use std::{
     fs::OpenOptions,
     io::Write,
@@ -57,7 +57,7 @@ async fn run(state: &Path, action: Option<Action>) -> Result<()> {
     match action {
         Some(Action::Stop) => stop(state).await,
         Some(Action::Status) => {
-            ensure!(running(state)?, "gateway is stopped");
+            ensure_any!(running(state)?, "gateway is stopped");
             Ok(())
         }
         #[cfg(target_os = "macos")]
@@ -80,7 +80,7 @@ fn arguments(state: &Path) -> Result<Vec<String>> {
         std::fs::write(&path, "[]\n")?;
     }
     let args = serde_json::from_slice(&std::fs::read(path)?)
-        .context("arguments.json must be a JSON array of gateway command-line arguments")?;
+        .std_context("arguments.json must be a JSON array of gateway command-line arguments")?;
     Ok(args)
 }
 async fn start(state: &Path) -> Result<()> {
@@ -126,22 +126,22 @@ async fn start(state: &Path) -> Result<()> {
                     && SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) == 0
                 {
                     return Err(std::io::Error::last_os_error())
-                        .context("cannot disable launcher stdio inheritance");
+                        .std_context("cannot disable launcher stdio inheritance");
                 }
             }
         }
         command.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    let mut child = command.spawn().context("cannot start gateway")?;
+    let mut child = command.spawn().std_context("cannot start gateway")?;
     let result = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if let Some(status) = child.try_wait()? {
-                anyhow::bail!(
+                n0_error::bail_any!(
                     "gateway exited ({status}); see gateway.log (port 45475 may already be in use)"
                 );
             }
             if running(state)? && state.join("ready").exists() {
-                return Ok::<_, anyhow::Error>(());
+                return Ok::<_, n0_error::AnyError>(());
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -153,7 +153,7 @@ async fn start(state: &Path) -> Result<()> {
             // This handle belongs to the process just spawned, never a saved PID.
             let _ = child.kill();
             let _ = child.wait();
-            Err(error).context("gateway startup timed out; see gateway.log")
+            Err(error).std_context("gateway startup timed out; see gateway.log")
         }
     }
 }
@@ -166,9 +166,9 @@ async fn stop(state: &Path) -> Result<()> {
         while running(state)? {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        Ok::<_, anyhow::Error>(())
+        Ok::<_, n0_error::AnyError>(())
     })
     .await
-    .context("gateway did not stop; see gateway.log")??;
+    .std_context("gateway did not stop; see gateway.log")??;
     Ok(())
 }
