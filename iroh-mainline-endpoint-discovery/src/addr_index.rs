@@ -150,6 +150,9 @@ impl AddrIndexBuilder {
         });
         let (servers_tx, servers) = watch::channel(BTreeSet::new());
         discovery.refresh(&client, &servers_tx).await?;
+        if servers.borrow().is_empty() {
+            return Err(e!(UdpError::NoServers));
+        }
         let refresh = task::spawn({
             let discovery = discovery.clone();
             let client = client.clone();
@@ -232,23 +235,21 @@ impl Discovery {
         if !bootstrapped {
             debug!("Mainline bootstrap failed; discovering index servers anyway");
         }
-        let signed_lookup = async {
-            let Some(key) = self.sources.list_key else {
-                return Ok::<_, UdpError>(Vec::new());
-            };
-            let mut stream = self.dht.get_mutable(&key, None, None).await?;
-            let mut items = Vec::new();
-            while let Some(item) = stream.next().await {
-                items.push(item);
-            }
-            Ok(items)
+        let mut items = Vec::new();
+        let signed_result = match self.sources.list_key {
+            Some(key) => match self.dht.get_mutable(&key, None, None).await {
+                Ok(stream) => collect_within(stream, Duration::from_secs(30), &mut items)
+                    .await
+                    .map_err(|_| e!(UdpError::Timeout)),
+                Err(err) => Err(err.into()),
+            },
+            None => Ok(()),
         };
-        let signed_result = tokio::time::timeout(Duration::from_secs(30), signed_lookup).await;
+        let received = items.len();
         let mut state = self.state.lock().await;
-        if let Ok(Ok(items)) = &signed_result {
-            for item in items {
-                state.accept(item.clone());
-            }
+        // Answers that arrived before a timeout count as well.
+        for item in items {
+            state.accept(item);
         }
         if state.signed.is_none()
             && let Some(item) = &self.sources.fallback_list
@@ -261,16 +262,22 @@ impl Discovery {
             state.accept(item.clone());
         }
         debug!(
-            found = matches!(signed_result, Ok(Ok(_))),
+            received,
+            ?signed_result,
             "signed index-list lookup completed"
         );
-        let mut peers = state
+        let signed_list = state
             .signed
             .as_ref()
-            .and_then(|item| crate::ServerList::decode(item.value(), item.key()))
+            .and_then(|item| crate::ServerList::decode(item.value(), item.key()));
+        drop(state);
+        // A signed empty list is an answer: the authority withdrew its servers.
+        let withdrawn = signed_list
+            .as_ref()
+            .is_some_and(|list| list.addresses().is_empty());
+        let mut peers = signed_list
             .map(|list| list.addresses().iter().copied().collect::<HashSet<_>>())
             .unwrap_or_default();
-        drop(state);
         if peers.is_empty() {
             if let Some(hash) = self.sources.rendezvous_hash {
                 debug!(infohash = %crate::infohash_hex(&hash), "discovering index servers through Mainline rendezvous");
@@ -292,16 +299,20 @@ impl Discovery {
                     }
                     Ok(())
                 };
-                match tokio::time::timeout(Duration::from_secs(30), lookup).await {
-                    Ok(result) => result?,
-                    Err(_) if peers.is_empty() => return Err(e!(UdpError::Timeout)),
-                    Err(_) => {}
+                let rendezvous = match tokio::time::timeout(Duration::from_secs(30), lookup).await {
+                    Ok(result) => result,
+                    Err(_) if peers.is_empty() => Err(e!(UdpError::Timeout)),
+                    Err(_) => Ok(()),
+                };
+                // After a withdrawal, the withdrawn servers are not kept either.
+                if !withdrawn {
+                    rendezvous?;
                 }
-            } else {
-                signed_result.map_err(|_| e!(UdpError::Timeout))??;
+            } else if !withdrawn {
+                signed_result?;
             }
         }
-        if peers.is_empty() {
+        if peers.is_empty() && !withdrawn {
             debug!("index server discovery found no servers");
             return Err(e!(UdpError::NoServers));
         }
@@ -311,13 +322,34 @@ impl Discovery {
         servers.send_if_modified(|current| {
             let changed = *current != peers;
             if changed {
-                info!(servers = ?peers, "index servers changed");
+                if peers.is_empty() {
+                    info!("the signed list withdrew all index servers");
+                } else {
+                    info!(servers = ?peers, "index servers changed");
+                }
                 *current = peers;
             }
             changed
         });
         Ok(())
     }
+}
+
+/// Collects items until `stream` ends or `limit` passes.
+///
+/// Items that arrived before a timeout stay in `items`.
+async fn collect_within<T>(
+    stream: impl n0_future::Stream<Item = T>,
+    limit: Duration,
+    items: &mut Vec<T>,
+) -> Result<(), tokio::time::error::Elapsed> {
+    tokio::time::timeout(limit, async {
+        let mut stream = std::pin::pin!(stream);
+        while let Some(item) = stream.next().await {
+            items.push(item);
+        }
+    })
+    .await
 }
 
 impl AddrIndex {
@@ -591,6 +623,56 @@ mod tests {
             .build()
             .await;
         assert!(matches!(result, Err(UdpError::NoServers { .. })));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn answers_before_a_timeout_are_kept() {
+        let answers = n0_future::stream::iter([1, 2]).chain(n0_future::stream::pending());
+        let mut items = Vec::new();
+        let result = collect_within(answers, Duration::from_secs(30), &mut items).await;
+        assert!(result.is_err());
+        assert_eq!(items, [1, 2]);
+    }
+
+    #[tokio::test]
+    async fn a_signed_withdrawal_removes_the_servers() {
+        let network = n0_mainline::Testnet::new(3).await.unwrap();
+        let node = || {
+            Dht::builder()
+                .bootstrap(&network.bootstrap)
+                .port(0)
+                .build()
+                .unwrap()
+        };
+        let authority = node();
+        let key = n0_mainline::SigningKey::from_bytes(&[49; 32]);
+        let listed = ServerList::new(vec!["203.0.113.1:60125".parse().unwrap()]).unwrap();
+        authority
+            .put_mutable(listed.sign(&key, 1).unwrap(), None)
+            .await
+            .unwrap();
+        let dht = node();
+        let client = UdpClient::attach(dht.clone()).await.unwrap();
+        let discovery = Discovery {
+            dht,
+            sources: Sources {
+                list_key: Some(key.verifying_key().to_bytes()),
+                ..Sources::default()
+            },
+            state: Mutex::new(DiscoveryState::default()),
+        };
+        let (servers_tx, servers) = watch::channel(BTreeSet::new());
+        discovery.refresh(&client, &servers_tx).await.unwrap();
+        assert_eq!(servers.borrow().len(), 1);
+        authority
+            .put_mutable(
+                ServerList::new(vec![]).unwrap().sign(&key, 2).unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+        discovery.refresh(&client, &servers_tx).await.unwrap();
+        assert!(servers.borrow().is_empty());
     }
 
     #[test]
