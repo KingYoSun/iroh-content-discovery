@@ -194,6 +194,33 @@ async fn cached_lookups_reach_the_server_once() {
     assert_eq!(server.metrics().gets.get(), 1);
 }
 
+#[tokio::test]
+async fn a_dead_index_server_does_not_delay_found_records() {
+    let server = Server::new(Limits::for_tests());
+    let handle = server.attach(test_dht()).await.unwrap();
+    let timeout = Duration::from_millis(500);
+    let index = AddrIndex::builder(test_dht())
+        .server(v4(loopback(handle.local_addr())))
+        // Nothing listens on the discard port.
+        .server("127.0.0.1:9".parse().unwrap())
+        .timeout(timeout)
+        .build()
+        .await
+        .unwrap();
+    let secret = SecretKey::generate();
+    // Publishing succeeds with the live server alone.
+    let addr = index.publish(&secret).await.unwrap()[0];
+    let started = std::time::Instant::now();
+    let records = index.lookup(addr).await.unwrap();
+    assert_eq!(records[0].endpoint_id, secret.public());
+    assert!(started.elapsed() < timeout / 2, "{:?}", started.elapsed());
+    // Without a record, the dead server might hold one, so the lookup waits.
+    let started = std::time::Instant::now();
+    let missing = "127.0.0.1:1".parse().unwrap();
+    assert!(index.lookup(missing).await.unwrap().is_empty());
+    assert!(started.elapsed() >= timeout);
+}
+
 /// Reads are public, so a record can be copied.
 ///
 /// It is signed for the socket it was stored under, so a reader discards it

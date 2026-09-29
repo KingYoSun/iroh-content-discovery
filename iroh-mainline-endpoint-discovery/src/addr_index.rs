@@ -403,7 +403,15 @@ impl AddrIndex {
         &self,
         addr: SocketAddrV4,
     ) -> Result<Vec<SignedRecord>, AddrIndexError> {
-        let result = self.client.resolve(addr).await?;
+        // A valid record is authenticated and bound to `addr`, so the first
+        // one is good enough. A miss still waits for every server.
+        let result = self
+            .client
+            .resolve_first(
+                addr,
+                Box::new(move |value| SignedRecord::decode(value, addr).is_some()),
+            )
+            .await?;
         let received = result.values.len();
         let records: Vec<_> = result
             .values
