@@ -10,6 +10,8 @@
 use data_encoding::{HEXLOWER, HEXLOWER_PERMISSIVE};
 
 mod addr_index;
+mod index_keeper;
+mod lookup_cache;
 mod pkarr;
 mod publisher;
 mod record;
@@ -18,13 +20,15 @@ mod resolver;
 mod server_list;
 mod udp;
 
-pub use addr_index::{AddrIndex, AddrIndexBuilder, AddrIndexError, DEFAULT_INDEX_LIST_KEY};
+pub use addr_index::{
+    AddrIndex, AddrIndexBuilder, AddrIndexError, DEFAULT_INDEX_LIST_KEY, DEFAULT_LOOKUP_CACHE_TTL,
+};
 pub use blake3::Hash;
 pub use pkarr::{
     BLAKE3_DOMAIN, PKARR_DOMAIN, PKARR_REFRESH, PkarrPublisher, decode_signed_packet,
     encode_signed_packet, is_hostname, pkarr_name,
 };
-pub use publisher::{ANNOUNCE_SPACING, Publisher, REFRESH, RETRY};
+pub use publisher::{ANNOUNCE_SPACING, INDEX_REFRESH, Publisher, REFRESH, RETRY};
 pub use record::{RecordPayload, RecordPayloadV1, SignedRecord};
 pub use republisher::republish_server_list;
 pub use resolver::Resolver;

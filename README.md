@@ -111,10 +111,28 @@ inbound UDP there. Mainline can choose the port but not the interface.
 `AddrIndex::discover(dht)` reads the signed server list maintained by n0, whose
 Pkarr key is `DEFAULT_INDEX_LIST_KEY`
 (`z6rb8uoy1pwuckhw8qx8i4qseczujxw4qakpe7xng3yi68wpyrqo`), and then uses the
-same DHT socket for index requests. It refreshes on use after ten minutes,
-keeps at most two servers, and gives each lookup thirty seconds. Finding none
-is an error. Rendezvous discovery through `get_peers` is opt-in with the
-builder below. Its announcements are untrusted, so those candidates may be
+same DHT socket for index requests. Finding no servers at first is an error.
+Discovery then repeats in the background every ten minutes; a failed refresh
+keeps the previous servers and retries after thirty seconds, so lookups never
+wait for it. It keeps at most two servers and gives each lookup thirty seconds.
+
+A `Publisher` keeps its index record and its announcements on separate
+schedules. Each infohash is announced every ten minutes, with jitter. The
+record is republished only while there are infohashes to announce: when it is
+older than thirty minutes (servers keep it for an hour), when discovery finds
+other servers, and when an announcement finds that Mainline now reports a
+different public address for us. It goes to all servers and counts once one
+stored it, since readers ask them all; a failure is retried after thirty
+seconds. Many infohashes share one record, so announcing them costs one index
+publication.
+
+An announcement goes ahead only if a server holds our record for the address
+Mainline sees, since readers could not resolve it otherwise. Without one, it
+waits for the next successful publication. After an outage of thirty seconds
+or more, it resumes after a random delay of up to a minute, so the waiting
+announcements do not restart at once.
+
+Rendezvous discovery through `get_peers` is opt-in with the builder below. Its announcements are untrusted, so those candidates may be
 unreachable or dishonest; the signed endpoint records they serve are validated
 either way.
 
@@ -142,7 +160,10 @@ let index = AddrIndex::builder(dht)
 ```
 
 The builder starts empty; `n0_defaults()` sets the list maintained by n0,
-`DEFAULT_INDEX_LIST_KEY`. With no server, key, or hash, `build` returns
+`DEFAULT_INDEX_LIST_KEY`, and caches lookups for `DEFAULT_LOOKUP_CACHE_TTL`
+(five minutes). `lookup_cache(ttl)` sets the cache on its own. Sockets without
+a record are remembered for at most thirty seconds, failed lookups not at all,
+and concurrent lookups of one socket share a request. With no server, key, or hash, `build` returns
 `NoServers` immediately. `AddrIndex::udp(dht, server)` and
 `AddrIndex::discover(dht)` are shorthands for one explicit server and for
 `builder(dht).n0_defaults()`. A server announces under a custom hash with
