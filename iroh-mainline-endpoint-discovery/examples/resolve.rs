@@ -1,7 +1,7 @@
 //! Resolves a BLAKE3 hash to endpoint IDs with discovery diagnostics enabled.
 //!
 //! Run `cargo run -p iroh-mainline-endpoint-discovery --example resolve -- <URL-or-hash>`.
-//! Uses public rendezvous discovery by default; `--index-server IP:PORT` overrides it.
+//! Uses the index servers listed by n0 by default; `--index-server IP:PORT` overrides them.
 //! Endpoint IDs go to stdout, diagnostics to stderr. `RUST_LOG` overrides the filter.
 
 use std::{collections::BTreeSet, net::SocketAddrV4, time::Duration};
@@ -23,7 +23,7 @@ struct Args {
     /// HTTP(S) blake3.net URL, z-base-32 hash, or 64-digit hexadecimal hash.
     #[arg(value_parser = parse_hash)]
     hash: Hash,
-    /// Address index server; otherwise use the public rendezvous hash.
+    /// Address index server; otherwise use the servers listed by n0.
     #[arg(long, env = "IROH_ADDR_INDEX")]
     index_server: Option<SocketAddrV4>,
     /// Overall timeout in seconds, including index-server discovery.
@@ -51,11 +51,12 @@ async fn resolve(args: Args) -> Result<()> {
     let infohash = infohash_from_blake3(&args.hash);
     info!(hash = %args.hash, infohash = %infohash_hex(&infohash), "resolving content providers");
     let dht = Dht::client()?;
-    info!(server = ?args.index_server, "finding index servers (public rendezvous if no explicit server)");
-    let index = match args.index_server {
-        Some(server) => AddrIndex::udp(dht.clone(), server).await?,
-        None => AddrIndex::discover(dht.clone()).await?,
-    };
+    info!(server = ?args.index_server, "finding index servers (n0 list if no explicit server)");
+    let mut builder = AddrIndex::builder(dht.clone()).n0_defaults();
+    if let Some(server) = args.index_server {
+        builder = builder.server(server);
+    }
+    let index = builder.build().await?;
     let resolver = Resolver::new(dht, index);
     let mut providers = resolver.resolve_stream(infohash.into()).await?;
     let mut unique = BTreeSet::new();

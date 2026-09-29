@@ -38,6 +38,42 @@ pub fn pkarr_name(public_key: &[u8; 32]) -> String {
     z32::encode(public_key)
 }
 
+/// Encodes an item as a Pkarr signed packet.
+///
+/// The layout is `key (32) ‖ signature (64) ‖ seq (u64 big endian) ‖ value`,
+/// as used by Pkarr relays. Returns `None` for items Pkarr cannot express: a
+/// salted item or a negative sequence.
+pub fn encode_signed_packet(item: &MutableItem) -> Option<Vec<u8>> {
+    if item.salt().is_some() {
+        return None;
+    }
+    let seq = u64::try_from(item.seq()).ok()?;
+    let mut bytes = Vec::with_capacity(104 + item.value().len());
+    bytes.extend_from_slice(item.key());
+    bytes.extend_from_slice(item.signature());
+    bytes.extend_from_slice(&seq.to_be_bytes());
+    bytes.extend_from_slice(item.value());
+    Some(bytes)
+}
+
+/// Decodes a Pkarr signed packet, returning `None` unless its signature verifies.
+pub fn decode_signed_packet(bytes: &[u8]) -> Option<MutableItem> {
+    let (key, rest) = bytes.split_first_chunk::<32>()?;
+    let (signature, rest) = rest.split_first_chunk::<64>()?;
+    let (seq, value) = rest.split_first_chunk::<8>()?;
+    let seq = i64::try_from(u64::from_be_bytes(*seq)).ok()?;
+    // BEP 44 signs the bencoded sequence and value, and Pkarr never salts.
+    let mut signable = format!("3:seqi{seq}e1:v{}:", value.len()).into_bytes();
+    signable.extend_from_slice(value);
+    iroh_base::PublicKey::from_bytes(key)
+        .ok()?
+        .verify(&signable, &iroh_base::Signature::from_bytes(signature))
+        .ok()?;
+    Some(MutableItem::new_signed_unchecked(
+        *key, *signature, value, seq, None,
+    ))
+}
+
 /// Publishes signed Pkarr packets and republishes them until dropped.
 ///
 /// One packet is held per key, so a publisher can serve several names at once.
@@ -313,6 +349,26 @@ mod tests {
 
     fn publisher() -> PkarrPublisher {
         PkarrPublisher::new(Dht::builder().no_bootstrap().port(0).build().unwrap())
+    }
+
+    #[test]
+    fn signed_packets_roundtrip_and_reject_tampering() {
+        let key = SigningKey::from_bytes(&[42; 32]);
+        let item = MutableItem::new(&key, b"packet", 1_700_000_000_000_000, None);
+        let bytes = encode_signed_packet(&item).unwrap();
+        assert_eq!(decode_signed_packet(&bytes), Some(item));
+        let mut tampered = bytes.clone();
+        *tampered.last_mut().unwrap() ^= 1;
+        assert!(decode_signed_packet(&tampered).is_none());
+        let mut changed_seq = bytes.clone();
+        changed_seq[96 + 7] ^= 1;
+        assert!(decode_signed_packet(&changed_seq).is_none());
+        assert!(decode_signed_packet(&bytes[..103]).is_none());
+        // Pkarr has no salt and no negative sequences.
+        assert!(
+            encode_signed_packet(&MutableItem::new(&key, b"packet", 1, Some(b"salt"))).is_none()
+        );
+        assert!(encode_signed_packet(&MutableItem::new(&key, b"packet", -1, None)).is_none());
     }
 
     #[tokio::test]

@@ -171,16 +171,17 @@ Server configuration follows one priority order:
 
 1. `--index-server IP:PORT` (`IROH_ADDR_INDEX`) skips discovery.
 2. `--index-list-key KEY` (`IROH_ADDR_INDEX_LIST_KEY`) selects a curated Pkarr list
-   of apex TXT `IPv4:port` records, publishable with iroh-share. The key can be
-   z-base-32 or 64 hex digits. See [publishing a list](../README.md#curated-bootstrap-list-pkarr).
-3. `--rendezvous-hash HEX` (`IROH_ADDR_INDEX_RENDEZVOUS`) selects the fallback hash;
-   with no discovery options set, the gateway uses the protocol hash
-   `b86c3d910e1a67ec9ba8a69a95bd7f8b08be923b`.
+   of apex TXT `IPv4:port` records, publishable with iroh-share. It defaults to
+   the list maintained by n0,
+   `z6rb8uoy1pwuckhw8qx8i4qseczujxw4qakpe7xng3yi68wpyrqo`. See
+   [publishing a list](../README.md#curated-bootstrap-list-pkarr).
+3. `--rendezvous-hash HEX` (`IROH_ADDR_INDEX_RENDEZVOUS`) enables the untrusted
+   rendezvous fallback, for example with the protocol hash
+   `b86c3d910e1a67ec9ba8a69a95bd7f8b08be923b`. It is off by default.
 
-Both discovery options may be supplied; the curated list takes precedence and
-rendezvous is used only if it yields no addresses. An explicit curated list does
-not enable rendezvous unless a hash is also supplied. Running with no arguments
-uses the default rendezvous hash. Public keys are z-base-32 or 64 hex digits;
+Rendezvous is used only if the curated list yields no addresses. With
+`--state-dir`, the last resolved list is kept in `index-list.pkarr` and used
+when the record does not resolve. Public keys are z-base-32 or 64 hex digits;
 infohashes are 40 hex digits. `--dht-port` controls the local Mainline UDP port
 (default: an available port).
 
