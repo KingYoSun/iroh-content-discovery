@@ -38,18 +38,25 @@ use iroh_mainline_endpoint_discovery::{Resolver, infohash_from_blake3};
 use lru::LruCache;
 use mime_classifier::MimeClassifier;
 use n0_error::{StdResultExt, anyerr, bail_any, e, ensure, ensure_any};
-use n0_future::{BufferedStreamExt, StreamExt};
+use n0_future::{BufferedStreamExt, StreamExt, stream};
 use percent_encoding::{AsciiSet, CONTROLS, NON_ALPHANUMERIC, utf8_percent_encode};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{Instrument, debug, debug_span, warn};
 
 mod pkarr_redirect;
+mod provider_cache;
 mod providers;
 mod ranges;
 pub use providers::filter_verified_providers;
 use ranges::Selection;
 
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(60);
+/// Deadline for finding a verified provider.
+///
+/// Shorter than [`LOOKUP_TIMEOUT`], which also covers reading from the
+/// provider, so a lookup that runs out of time is recorded as such before the
+/// request as a whole is abandoned.
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(45);
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const SNIFF_BYTES: u64 = 8192;
 /// Maximum HashSeq size: one metadata hash and at most 32,767 file hashes.
@@ -108,6 +115,8 @@ struct Inner {
     resolver: Resolver,
     classifier: MimeClassifier,
     pkarr: Mutex<pkarr_redirect::Cache>,
+    /// Recently verified providers and recently failed lookups, per hash.
+    providers: Arc<provider_cache::ProviderCache>,
     // Reuse one provider for repeated video seeks, with bounded metadata memory.
     cache: Mutex<LruCache<Hash, Source>>,
     collections: Mutex<LruCache<Hash, CollectionSource>>,
@@ -137,6 +146,7 @@ impl Gateway {
             resolver,
             classifier: MimeClassifier::new(),
             pkarr: Mutex::new(pkarr_redirect::Cache::default()),
+            providers: Arc::default(),
             cache: Mutex::new(LruCache::new(SOURCE_SLOTS)),
             collections: Mutex::new(LruCache::new(SOURCE_SLOTS)),
             sizes: Mutex::new(LruCache::new(SIZE_SLOTS)),
@@ -225,29 +235,68 @@ impl Gateway {
 
     #[tracing::instrument(level = "debug", skip(self), fields(hash = %hash))]
     async fn connection(&self, hash: Hash) -> Result<Connection, HttpError> {
+        use provider_cache::Miss;
+        use providers::{Provenance, verified_providers};
+
+        const NOT_FOUND: HttpError = HttpError(
+            StatusCode::NOT_FOUND,
+            "no verified provider found for this hash",
+        );
+        // A page asking for the same unavailable hash many times costs one
+        // lookup. Other failures, like a blob that is not a collection, are
+        // not remembered, so they cannot poison valid requests.
+        match self.0.providers.missing(hash) {
+            Some(Miss::NotFound) => {
+                debug!("no provider found recently; not looking again yet");
+                return Err(NOT_FOUND);
+            }
+            Some(Miss::TimedOut) => {
+                debug!("provider lookup timed out recently; not looking again yet");
+                return Err(HttpError(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "provider lookup or transfer timed out",
+                ));
+            }
+            None => {}
+        }
         let infohash = infohash_from_blake3(&blake3::Hash::from_bytes(*hash.as_bytes()));
         let started = Instant::now();
-        debug!(infohash = %iroh_mainline_endpoint_discovery::infohash_hex(&infohash), "looking up content provider");
-        let providers = self
-            .0
-            .resolver
-            .resolve_stream(infohash.into())
-            .await
-            .map_err(|error| {
-                debug!(
-                    ?error,
-                    elapsed_ms = started.elapsed().as_millis(),
-                    "provider lookup failed"
-                );
-                HttpError::upstream(error)
-            })?;
-        let provider = filter_verified_providers(self.0.endpoint.clone(), hash, providers)
-            .next()
-            .await
-            .ok_or(HttpError(
-                StatusCode::NOT_FOUND,
-                "no verified provider found for this hash",
-            ))?;
+        // Providers that recently served this hash go first, so their probes
+        // start before the lookup has found anyone; the fastest probe wins.
+        let known = self.0.providers.providers(hash);
+        debug!(
+            infohash = %iroh_mainline_endpoint_discovery::infohash_hex(&infohash),
+            known = known.len(),
+            "looking up content provider"
+        );
+        let candidates = stream::iter(
+            known
+                .into_iter()
+                .map(|(provider, probed)| (provider, Provenance::Verified(probed))),
+        )
+        .chain(
+            self.0
+                .resolver
+                .resolve_stream(infohash.into())
+                .map(|provider| (provider, Provenance::Discovered)),
+        );
+        let mut verified = verified_providers(
+            self.0.endpoint.clone(),
+            hash,
+            candidates,
+            Some(self.0.providers.clone()),
+        );
+        let provider = match tokio::time::timeout(DISCOVERY_TIMEOUT, verified.next()).await {
+            Ok(Some(provider)) => provider,
+            Ok(None) => {
+                self.0.providers.record_missing(hash, Miss::NotFound);
+                return Err(NOT_FOUND);
+            }
+            Err(elapsed) => {
+                self.0.providers.record_missing(hash, Miss::TimedOut);
+                return Err(HttpError::timeout(elapsed));
+            }
+        };
         debug!(%provider, elapsed_ms = started.elapsed().as_millis(), "provider lookup complete; connecting");
         let started = Instant::now();
         let connection = self.0
