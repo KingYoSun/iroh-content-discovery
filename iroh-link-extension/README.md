@@ -149,6 +149,12 @@ rsvg-convert -w 32 -h 32 icon-small.svg -o icon-32.png
 rsvg-convert -w 16 -h 16 icon-small.svg -o icon-16.png
 ```
 
+The gateway installers use the same artwork:
+`packaging/gateway/windows/iroh-gateway.ico` (16–32 px from `icon-small.svg`,
+48–256 px from `icon.svg`) and `packaging/gateway/macos/AppIcon.icns` (built
+with `iconutil` from an iconset rendered the same way). Regenerate both after
+changing the icon.
+
 Chrome Web Store images live in `store/`, each rendered from the SVG next to
 it: `screenshot.svg` (1280×800) and `promo-small.svg` (440×280). Both contain an
 inlined copy of `icon.svg`; update that copy after changing the icon. They are not

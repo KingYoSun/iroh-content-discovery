@@ -28,6 +28,7 @@ with tempfile.TemporaryDirectory(prefix="iroh-local-gateway-pkg-") as temporary:
             "CFBundleIdentifier": "computer.n0.iroh-local-gateway",
             "CFBundleName": "Iroh Gateway",
             "CFBundlePackageType": "APPL",
+            "CFBundleIconFile": "AppIcon",
             "CFBundleShortVersionString": version,
             "CFBundleVersion": version,
             "LSUIElement": True,
@@ -37,6 +38,7 @@ with tempfile.TemporaryDirectory(prefix="iroh-local-gateway-pkg-") as temporary:
     resources.mkdir()
     for name in ["README.md", "LICENSE-APACHE", "LICENSE-MIT"]:
         shutil.copy2(staged / name, resources / name)
+    shutil.copy2(root / "packaging/gateway/macos/AppIcon.icns", resources / "AppIcon.icns")
     subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(contents.parent)], check=True)
     shutil.copytree(staged / "extensions", applications / "Iroh Gateway Extensions")
     for action in ["Start", "Stop"]:

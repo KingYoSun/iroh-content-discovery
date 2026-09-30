@@ -21,3 +21,20 @@ class ExtensionFiles(unittest.TestCase):
                 self.assertEqual(set(archive.namelist()), set(FILES + ['manifest.json']))
                 self.assertEqual(json.loads(archive.read('manifest.json')), firefox)
             self.assertTrue((root / 'Install extensions.html').is_file())
+
+    def test_files_referenced_by_manifests_are_staged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            extensions(root)
+            for browser in ['chrome', 'firefox']:
+                manifest = json.loads((root / browser / 'manifest.json').read_text())
+                referenced = set(manifest.get('icons', {}).values())
+                referenced |= set(manifest['action'].get('default_icon', {}).values())
+                referenced.add(manifest['action']['default_popup'])
+                referenced.add(manifest['options_ui']['page'])
+                background = manifest['background']
+                referenced |= set(background.get('scripts', []))
+                if 'service_worker' in background:
+                    referenced.add(background['service_worker'])
+                for name in referenced:
+                    self.assertTrue((root / browser / name).is_file(), f'{browser}/{name}')
