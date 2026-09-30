@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>iroh content links</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 17px/1.6 system-ui, sans-serif; max-width: 40em; margin: 3em auto; padding: 0 1em; }
+</style>
+</head>
+<body>
+<h1>This link needs a local gateway</h1>
+<p>Links on <code>*.blake3.net</code> and <code>*.pkarr.net</code> open content
+from peers over iroh, through a gateway running on your own machine.</p>
+<h2>See <a href="https://pkarr.net" target="_blank">pkarr.net</a> for instructions</h2>
+<p>Refresh this page once you installed the gateway and browser extension.</p>
+<div id="pkdns" hidden>
+<h2>Inspect this Pkarr link</h2>
+<p>
+You can <a id="pkdns-link" target="_blank">inspect this Pkarr key via PKDNS</a>, a public gateway to resolve Pkarr packets.
+</p>
+</div>
+
+<script>
+(function () {
+  var labels = location.hostname.split('.');
+  var label = labels.length > 2 ? labels[0] : '';
+  if (!/^[ybndrfg8ejkmcpqxot1uwisza345h769]{52}$/.test(label)) return;
+  document.getElementById('pkdns-link').href = 'https://pkdns.net/?id=' + label;
+  document.getElementById('pkdns').hidden = false;
+})();
+</script>
+</body>
+</html>
+
