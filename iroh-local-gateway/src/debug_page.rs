@@ -39,6 +39,13 @@ const MAINLINE_TIMEOUT: Duration = Duration::from_secs(15);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const CONCURRENT_LOOKUPS: usize = 16;
 const CONCURRENT_PROBES: usize = 8;
+/// Gap between the starts of index lookups.
+///
+/// TODO: remove once n0-mainline splits GRO batches
+/// (https://github.com/n0-computer/n0-mainline/pull/11). Until then a Linux
+/// index server drops lookups that arrive back to back, since its socket
+/// coalesces them into one datagram it cannot parse.
+const LOOKUP_SPACING: Duration = Duration::from_millis(20);
 
 /// One index record for a peer, or why there is none.
 enum Resolution {
@@ -163,6 +170,11 @@ async fn providers_section(gateway: &Gateway, hash: Hash) -> String {
     let started = Instant::now();
     let (peers, peers_note) = peers(gateway, hash).await;
     let lookups: Vec<(SocketAddrV4, Resolution)> = stream::iter(peers.iter().copied())
+        // TODO: drop with LOOKUP_SPACING.
+        .then(|peer| async move {
+            tokio::time::sleep(LOOKUP_SPACING).await;
+            peer
+        })
         .map(|peer| {
             let index = gateway.0.resolver.index().clone();
             async move {
