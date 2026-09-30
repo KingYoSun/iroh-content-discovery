@@ -102,7 +102,10 @@ pub(crate) async fn redirect(
         });
     let key = parse_key(encoded)?;
     if crate::has_flag(uri.query(), "debug") {
-        return Ok(crate::debug_page::pkarr(&gateway, &key, encoded).await);
+        let host = subdomain
+            .as_ref()
+            .and_then(|_| headers.get(header::HOST)?.to_str().ok());
+        return Ok(crate::debug_page::pkarr(&gateway, &key, encoded, host).await);
     }
     let started = std::time::Instant::now();
     debug!(key = encoded, "resolving Pkarr record");

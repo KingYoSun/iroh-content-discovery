@@ -6,8 +6,8 @@
 //! shows peers that did not resolve and providers that failed.
 //!
 //! For a Pkarr key: every answer Mainline returns, the newest record in the
-//! zone format the iroh-share GUI edits, and the providers of the content it
-//! points to.
+//! zone format the iroh-share GUI edits, and a link to the debug page of the
+//! content it points to.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -59,8 +59,16 @@ pub(crate) async fn providers(gateway: &Gateway, hash: Hash) -> Response {
     page(&format!("Providers of {encoded}"), &body)
 }
 
-/// Renders the Pkarr page for `key`, and the providers of its content target.
-pub(crate) async fn pkarr(gateway: &Gateway, key: &[u8; 32], encoded: &str) -> Response {
+/// Renders the Pkarr page for `key`, linking to its content target's debug page.
+///
+/// `host` is the request's `Host` header when it came in on a Pkarr
+/// subdomain, used to link to the content's debug page on the same port.
+pub(crate) async fn pkarr(
+    gateway: &Gateway,
+    key: &[u8; 32],
+    encoded: &str,
+    host: Option<&str>,
+) -> Response {
     let started = Instant::now();
     let mut items = Vec::new();
     let lookup = async {
@@ -128,11 +136,22 @@ pub(crate) async fn pkarr(gateway: &Gateway, key: &[u8; 32], encoded: &str) -> R
         }
     }
     if let Some(hash) = content {
+        let hash = z32::encode(hash.as_bytes());
+        // A subdomain request links to the content's own origin on the same
+        // port; a path request stays on this origin.
+        let link = match host {
+            Some(host) => {
+                let port = host
+                    .rsplit_once(':')
+                    .map_or(String::new(), |(_, port)| format!(":{port}"));
+                format!("http://{hash}.blake3.localhost{port}/?debug")
+            }
+            None => format!("/blake3/{hash}/?debug"),
+        };
         body.push_str(&format!(
-            "<h1>Providers of {}</h1>\n",
-            z32::encode(hash.as_bytes())
+            "<p><a href=\"{}\">Providers of {hash}</a></p>\n",
+            html_escape(&link)
         ));
-        body.push_str(&providers_section(gateway, hash).await);
     }
     page(&format!("Pkarr {encoded}"), &body)
 }

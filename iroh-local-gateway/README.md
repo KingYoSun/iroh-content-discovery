@@ -254,7 +254,7 @@ Query flags:
   endpoint the address index has for it or why there is none, and how long a
   probe of that endpoint took or why it failed. On a Pkarr URL it shows every
   answer for the key, the newest record in the zone format the iroh-share GUI
-  uses, and the providers of the content it points to. It bypasses all caches
+  uses, and a link to the debug page of the content it points to. It bypasses all caches
   and takes up to about half a minute.
 
 The gateway discovers the provider
