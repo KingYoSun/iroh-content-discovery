@@ -39,10 +39,10 @@ const CONCURRENT_LOOKUPS: usize = 16;
 const CONCURRENT_PROBES: usize = 8;
 /// Gap between the starts of index lookups.
 ///
-/// TODO: remove once n0-mainline splits GRO batches
-/// (https://github.com/n0-computer/n0-mainline/pull/11). Until then a Linux
-/// index server drops lookups that arrive back to back, since its socket
-/// coalesces them into one datagram it cannot parse.
+/// TODO: remove once the index servers run n0-mainline 0.7.1 or later, which
+/// splits GRO batches (https://github.com/n0-computer/n0-mainline/pull/11).
+/// Older Linux servers drop lookups that arrive back to back, since their
+/// socket coalesces them into one datagram they cannot parse.
 const LOOKUP_SPACING: Duration = Duration::from_millis(20);
 
 /// One index record for a peer, or why there is none.
