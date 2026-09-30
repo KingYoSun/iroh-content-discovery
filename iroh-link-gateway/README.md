@@ -336,6 +336,11 @@ An occupied port fails startup without stopping the other application.
   the gateway; Start registers it and Stop unregisters it. The app also starts
   the gateway when opened. Install for your account without `sudo`.
 
+Linux x64 and arm64 get a `.tar.gz` of statically linked binaries instead of an
+installer. Unpack it anywhere and run `iroh-gateway-background` to start the
+gateway; nothing is registered to start it at login. The extension files are in
+the archive's `extensions` directory.
+
 Extensions are local files for manual installation; browser profiles are not
 modified. Open `extensions/Install extensions.html` on Windows or
 `~/Applications/Iroh Link Gateway Extensions/Install extensions.html` on macOS.
@@ -345,8 +350,10 @@ Edition, Nightly, or ESR with signature enforcement disabled. Release Firefox
 requires Mozilla signing for permanent installation. The instructions link to
 Mozilla's requirements. No extension signing or publishing happens during builds.
 
-Settings and logs live in `%LOCALAPPDATA%\iroh-link-gateway` on Windows and
-`~/Library/Application Support/iroh-link-gateway` on macOS. `gateway.log` contains
+Settings and logs live in `%LOCALAPPDATA%\iroh-link-gateway` on Windows,
+`~/Library/Application Support/iroh-link-gateway` on macOS, and
+`~/.local/share/iroh-link-gateway` (or `$XDG_DATA_HOME/iroh-link-gateway`) on
+Linux. `gateway.log` contains
 runtime logs; on gateway startup, logs larger than 5 MiB replace
 `gateway.previous.log` and `gateway.log` starts empty. Logs are not rotated while
 the gateway is running. `launcher.log` contains startup failures. Uninstall
@@ -369,7 +376,8 @@ its `stop` and `status` commands operate on the current user's instance. An opti
 ### Building installers
 
 Build the `iroh-link-gateway` package's binaries for
-`x86_64-pc-windows-msvc` or `aarch64-apple-darwin` in release mode, then run:
+`x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `x86_64-unknown-linux-musl`, or
+`aarch64-unknown-linux-musl` in release mode, then run:
 
 ```sh
 python packaging/gateway/stage.py <target>
@@ -377,11 +385,15 @@ python packaging/gateway/stage.py <target>
 ./packaging/gateway/windows/build.ps1
 # On macOS:
 python packaging/gateway/macos/build.py
+# On Linux:
+python packaging/gateway/linux/build.py <target>
 ```
 
-Installers and SHA-256 files are written to `dist/`. The macOS app is ad-hoc signed;
-the installer is not Developer ID signed or notarized. Windows installers are
-unsigned. Native install/upgrade/uninstall smoke tests run on ephemeral CI runners.
+Installers, Linux archives, and SHA-256 files are written to `dist/`. The macOS
+app is ad-hoc signed; the installer is not Developer ID signed or notarized. Windows installers are
+unsigned. Native install/upgrade/uninstall smoke tests run on ephemeral CI runners;
+the Linux smoke test unpacks the archive and starts and stops the gateway in a
+temporary directory.
 The `Gateway installers` workflow builds PR artifacts and supports manual runs;
 only `gateway-v*` tags publish GitHub release assets. No Linux installer or Intel
 macOS binary is built.
