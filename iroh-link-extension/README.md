@@ -1,9 +1,8 @@
 # iroh link extension
 
-Workspace project five: a Manifest V3 extension for desktop Chrome, Brave, and
-Firefox.
-It sends content links to a local HTTP gateway without contacting the domain's
-web server:
+A Manifest V3 extension for desktop Chrome, Brave, and Firefox. It sends
+content links to a local HTTP gateway without contacting the domain's web
+server:
 
 ```text
 https://<z32>.blake3.net/path/to/file
@@ -123,6 +122,19 @@ The popup requests it when saving with redirects enabled.
 Permissions are limited to `*.blake3.net`, `*.pkarr.net`, local extension settings, and
 request redirection. The extension needs no access to browsing history or all
 websites. The local gateway must be running; the extension does not start it.
+
+## Icons
+
+The PNG icons are rendered from `icon.svg` (48 and 128 px) and the simplified
+`icon-small.svg` (16 and 32 px). After editing a source, regenerate them with
+`rsvg-convert`, for example:
+
+```sh
+rsvg-convert -w 128 -h 128 icon.svg -o icon-128.png
+rsvg-convert -w 48 -h 48 icon.svg -o icon-48.png
+rsvg-convert -w 32 -h 32 icon-small.svg -o icon-32.png
+rsvg-convert -w 16 -h 16 icon-small.svg -o icon-16.png
+```
 
 ## Tests
 

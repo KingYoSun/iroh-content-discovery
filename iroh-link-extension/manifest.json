@@ -3,6 +3,12 @@
   "name": "iroh link",
   "version": "0.2.1",
   "description": "Open blake3.net content and resolve pkarr.net names through your local iroh HTTP gateway.",
+  "icons": {
+    "16": "icon-16.png",
+    "32": "icon-32.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  },
   "permissions": [
     "declarativeNetRequestWithHostAccess",
     "storage"
@@ -22,6 +28,10 @@
   },
   "action": {
     "default_title": "iroh link",
+    "default_icon": {
+      "16": "icon-16.png",
+      "32": "icon-32.png"
+    },
     "default_popup": "popup.html"
   },
   "options_ui": {
