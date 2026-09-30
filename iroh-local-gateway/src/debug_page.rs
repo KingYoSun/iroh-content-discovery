@@ -11,7 +11,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    net::SocketAddrV4,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddrV4},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -19,16 +19,14 @@ use axum::{
     http::header,
     response::{IntoResponse, Response},
 };
-use hickory_proto::{
-    ProtoError,
-    op::Message,
-    rr::{Name, RData, RecordType},
-};
 use iroh::{Endpoint, EndpointId};
 use iroh_blobs::Hash;
 use iroh_mainline_endpoint_discovery::{AddrIndexError, SignedRecord, infohash_from_blake3};
 use n0_future::{BufferedStreamExt, StreamExt, stream};
-use simple_dns::Packet;
+use simple_dns::{
+    Packet,
+    rdata::{RData, SVCB, SVCParam},
+};
 use tokio::time::Instant;
 
 use crate::{Gateway, LISTING_CSS, html_escape, pkarr_redirect};
@@ -354,55 +352,120 @@ fn format_age(seconds: u64) -> String {
 
 /// Renders a DNS packet as the zone-style lines the iroh-share GUI edits.
 ///
-/// Copied from `dns_records::text` in iroh-share, so both show a record the
-/// same way.
+/// Follows `dns_records::text` in iroh-share, so the records it writes (HTTPS,
+/// URI, TXT, A, AAAA) look the same in both. Types simple-dns does not know
+/// are shown in the generic RFC 3597 form.
 fn text(key: &str, bytes: &[u8]) -> Result<String, String> {
     use std::fmt::Write;
-    let origin: Name = format!("{key}.")
-        .parse()
-        .map_err(|e: ProtoError| e.to_string())?;
-    let message = Message::from_vec(bytes).map_err(|e| e.to_string())?;
+    let packet = Packet::parse(bytes).map_err(|e| e.to_string())?;
+    let suffix = format!(".{key}");
     let mut text = String::new();
-    for record in message.answers() {
-        let name = record.name();
-        if !origin.zone_of(name) {
-            return Err("record owner must be within this pkarr name".into());
-        }
-        let owner = if *name == origin {
+    for record in &packet.answers {
+        let name = record.name.to_string();
+        let owner = if name.eq_ignore_ascii_case(key) {
             "@".to_owned()
         } else {
-            let labels = name.num_labels() - origin.num_labels();
-            let mut relative =
-                Name::from_labels(name.iter().take(labels.into())).map_err(|e| e.to_string())?;
-            relative.set_fqdn(false);
-            relative.to_string()
+            let cut = name.len().checked_sub(suffix.len());
+            match cut.and_then(|cut| Some((name.get(..cut)?, name.get(cut..)?))) {
+                Some((label, rest)) if !label.is_empty() && rest.eq_ignore_ascii_case(&suffix) => {
+                    label.to_owned()
+                }
+                _ => return Err("record owner must be within this pkarr name".into()),
+            }
         };
-        let ttl = record.ttl();
-        match record.data() {
-            RData::Unknown {
-                code: RecordType::Unknown(256),
-                rdata,
-            } => {
-                let (header, target) = rdata
-                    .anything()
+        let ttl = record.ttl;
+        let (kind, data) = match &record.rdata {
+            RData::A(a) => ("A".to_owned(), Ipv4Addr::from(a.address).to_string()),
+            RData::AAAA(a) => ("AAAA".to_owned(), Ipv6Addr::from(a.address).to_string()),
+            RData::CNAME(cname) => ("CNAME".to_owned(), format!("{}.", cname.0)),
+            RData::TXT(txt) => {
+                let parts: Vec<_> = txt
+                    .iter_raw()
+                    .map(|(key, value)| {
+                        let mut part = key.to_vec();
+                        if let Some(value) = value {
+                            part.push(b'=');
+                            part.extend_from_slice(value);
+                        }
+                        quote(&part)
+                    })
+                    .collect();
+                ("TXT".to_owned(), parts.join(" "))
+            }
+            RData::HTTPS(https) => ("HTTPS".to_owned(), svcb(&https.0)),
+            RData::SVCB(svcb_data) => ("SVCB".to_owned(), svcb(svcb_data)),
+            // URI (RFC 7553), unknown to simple-dns: priority, weight, target.
+            RData::NULL(256, uri) => {
+                let (header, target) = uri
+                    .get_data()
                     .split_first_chunk::<4>()
                     .ok_or("URI record is too short")?;
                 let priority = u16::from_be_bytes([header[0], header[1]]);
                 let weight = u16::from_be_bytes([header[2], header[3]]);
-                let target = quote(target);
-                writeln!(text, "{owner} {ttl} IN URI {priority} {weight} {target}")
-                    .expect("writing to a String");
+                (
+                    "URI".to_owned(),
+                    format!("{priority} {weight} {}", quote(target)),
+                )
             }
-            RData::TXT(txt) => {
-                let parts: Vec<_> = txt.txt_data().iter().map(|part| quote(part)).collect();
-                writeln!(text, "{owner} {ttl} IN TXT {}", parts.join(" "))
-                    .expect("writing to a String");
+            RData::NULL(code, data) => {
+                let data = data.get_data();
+                let hex: String = data.iter().map(|byte| format!("{byte:02x}")).collect();
+                (format!("TYPE{code}"), format!("\\# {} {hex}", data.len()))
             }
-            data => writeln!(text, "{owner} {ttl} IN {} {data}", record.record_type())
-                .expect("writing to a String"),
-        }
+            other => {
+                writeln!(
+                    text,
+                    "; {owner} {ttl} IN {:?} (not shown)",
+                    other.type_code()
+                )
+                .expect("writing to a String");
+                continue;
+            }
+        };
+        writeln!(text, "{owner} {ttl} IN {kind} {data}").expect("writing to a String");
     }
     Ok(text)
+}
+
+/// Renders SVCB or HTTPS data as `priority target. key=value ...`.
+fn svcb(svcb: &SVCB<'_>) -> String {
+    let join = |items: Vec<String>| items.join(",");
+    let mut out = format!("{} {}.", svcb.priority, svcb.target);
+    for param in svcb.iter_params() {
+        out.push(' ');
+        out.push_str(&match param {
+            SVCParam::Port(port) => format!("port={port}"),
+            SVCParam::Alpn(ids) => format!(
+                "alpn={}",
+                join(ids.iter().map(ToString::to_string).collect())
+            ),
+            SVCParam::NoDefaultAlpn => "no-default-alpn".to_owned(),
+            SVCParam::Mandatory(keys) => {
+                format!(
+                    "mandatory={}",
+                    join(keys.iter().map(|key| format!("key{key}")).collect())
+                )
+            }
+            SVCParam::Ipv4Hint(ips) => format!(
+                "ipv4hint={}",
+                join(
+                    ips.iter()
+                        .map(|ip| Ipv4Addr::from(*ip).to_string())
+                        .collect()
+                )
+            ),
+            SVCParam::Ipv6Hint(ips) => format!(
+                "ipv6hint={}",
+                join(
+                    ips.iter()
+                        .map(|ip| Ipv6Addr::from(*ip).to_string())
+                        .collect()
+                )
+            ),
+            other => format!("key{}", other.key_code()),
+        });
+    }
+    out
 }
 
 /// Quotes a character string, escaping what the zone parser would interpret.
@@ -426,7 +489,7 @@ fn quote(bytes: &[u8]) -> String {
 mod tests {
     use simple_dns::{
         CLASS, Name as DnsName, ResourceRecord,
-        rdata::{HTTPS, NULL, RData as DnsRData, SVCB},
+        rdata::{A, HTTPS, NULL, RData as DnsRData, TXT},
     };
 
     use super::*;
@@ -458,12 +521,28 @@ mod tests {
                 DnsRData::NULL(256, NULL::new(&uri).unwrap()),
             ),
         ];
+        packet.answers.push(ResourceRecord::new(
+            DnsName::new_unchecked(KEY),
+            CLASS::IN,
+            300,
+            DnsRData::A(A {
+                address: u32::from(Ipv4Addr::new(192, 0, 2, 1)),
+            }),
+        ));
+        packet.answers.push(ResourceRecord::new(
+            DnsName::new_unchecked(KEY),
+            CLASS::IN,
+            300,
+            DnsRData::TXT(TXT::new().with_string("hello \"world\"").unwrap()),
+        ));
         let bytes = packet.build_bytes_vec().unwrap();
         assert_eq!(
             text(KEY, &bytes).unwrap(),
             "@ 300 IN HTTPS 0 example.com.\n\
              @ 300 IN HTTPS 1 example.com. port=8443\n\
-             _https._tcp 300 IN URI 0 0 \"https://example.com/a?b\"\n"
+             _https._tcp 300 IN URI 0 0 \"https://example.com/a?b\"\n\
+             @ 300 IN A 192.0.2.1\n\
+             @ 300 IN TXT \"hello \\\"world\\\"\"\n"
         );
     }
 }
