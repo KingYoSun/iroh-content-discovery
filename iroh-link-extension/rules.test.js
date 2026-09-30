@@ -15,7 +15,7 @@ test("runtime permission requests cover both domains declared in the manifest", 
 
 // Model URL matching and transformations; Chrome/Brave enforce the actual rules.
 function redirect(input, port = DEFAULT_SETTINGS.port) {
-  const rules = makeRules({ port, enabled: true }).sort((a, b) => b.priority - a.priority);
+  const rules = makeRules({ port }).sort((a, b) => b.priority - a.priority);
   for (const { condition, action } of rules) {
     const regex = new RegExp(condition.regexFilter, condition.isUrlFilterCaseSensitive ? "" : "i");
     if (!regex.test(input)) continue;
@@ -75,11 +75,13 @@ test("public-key subdomains rewrite to a local per-key origin", () => {
   assert.equal(redirect(`https://${key}.pkarr.net/a%2Fb/file%20name?x=1#part`), `http://${key}.pkarr.localhost:45475/a%2Fb/file%20name?x=1#part`);
 });
 
-test("ports are bounded, settings are optional only through defaults, disable removes rules", () => {
+test("ports are bounded, settings are optional only through defaults", () => {
   for (const port of [0, -1, 65536, 1.5, NaN, "8080"]) {
-    assert.throws(() => validateSettings({ port, enabled: true }));
+    assert.throws(() => validateSettings({ port }));
   }
-  assert.deepEqual(makeRules({ port: 8080, enabled: false }), []);
+  // Older versions stored an `enabled` flag; it is ignored and dropped.
+  assert.deepEqual(validateSettings({ port: 8080, enabled: false }), { port: 8080 });
+  assert.equal(makeRules({ port: 8080, enabled: false }).length, 2);
   // Rule 3 is retired, but stays in RULE_IDS so upgrades remove it.
   assert.deepEqual(makeRules(DEFAULT_SETTINGS).map(({ id }) => id), [1, 2]);
   assert.deepEqual(RULE_IDS, [1, 2, 3]);

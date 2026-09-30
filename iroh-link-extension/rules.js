@@ -1,4 +1,4 @@
-export const DEFAULT_SETTINGS = { port: 45475, enabled: true };
+export const DEFAULT_SETTINGS = { port: 45475 };
 
 // One entry per link domain: the public name, and the localhost suffix the
 // gateway serves it under. Rule ids follow this order.
@@ -21,15 +21,12 @@ export function validateSettings(settings) {
   if (!Number.isInteger(settings.port) || settings.port < 1 || settings.port > 65535) {
     throw new Error("Enter a port from 1 to 65535.");
   }
-  if (typeof settings.enabled !== "boolean") {
-    throw new Error("Invalid enabled setting.");
-  }
-  return { port: settings.port, enabled: settings.enabled };
+  // Drops the retired `enabled` field that older versions stored.
+  return { port: settings.port };
 }
 
 export function makeRules(settings) {
-  const { port, enabled } = validateSettings(settings);
-  if (!enabled) return [];
+  const { port } = validateSettings(settings);
   const resourceTypes = [
     "main_frame", "sub_frame", "stylesheet", "script", "image", "font",
     "object", "xmlhttprequest", "ping", "csp_report", "media", "other",

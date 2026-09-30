@@ -27,7 +27,7 @@ Pkarr links use a z-base-32 public key in the subdomain. The gateway verifies
 the signed DNS packet and redirects to its HTTPS target, preserving the path
 and query. Ordinary HTTPS destinations open normally; a destination under
 `<hash>.blake3.net` is routed through the content gateway by the existing rules.
-The gateway validates public keys. Both domains use the same port and enable switch.
+The gateway validates public keys. Both domains use the same port.
 
 ## Install in Chrome or Brave
 
@@ -35,8 +35,8 @@ The gateway validates public keys. Both domains use the same port and enable swi
 2. Enable **Developer mode**.
 3. Click **Load unpacked**, then choose this `iroh-link-extension` directory
    (the directory containing `manifest.json`). No build step is required.
-4. Open the extension popup, set the gateway port (default **45475**), leave
-   local redirects enabled, and click **Save**.
+4. Open the extension popup, set the gateway port (default **45475**), and
+   click **Save**.
 5. Start the gateway and open a content link:
 
    ```sh
@@ -110,18 +110,31 @@ extension's Details page in Chrome/Brave. In Firefox, use the extension's
 **Preferences/Options** in `about:addons`. Both entry points use the same
 settings page; the options entry opens it in a tab.
 
-The popup configures the localhost port and can disable all redirects. Saved
-settings and dynamic rules survive browser restarts. There is no always-running
+The popup configures the localhost port. To stop redirecting, turn the
+extension off in the browser's extension settings. The saved port and dynamic
+rules survive browser restarts. There is no always-running
 background process; the service worker only initializes rules at installation
 or update. Rule matching and redirection happen in the browser network stack.
 The browser's address bar changes to the localhost URL.
 
 Firefox lets users withhold host access to `*.blake3.net` and `*.pkarr.net`.
-The popup requests it when saving with redirects enabled.
+The popup requests it when saving.
 
 Permissions are limited to `*.blake3.net`, `*.pkarr.net`, local extension settings, and
 request redirection. The extension needs no access to browsing history or all
 websites. The local gateway must be running; the extension does not start it.
+
+## Privacy
+
+iroh link collects no data and sends nothing to its authors or any third
+party. It has no analytics and contacts no remote servers.
+
+- Redirects are matched by the browser; the extension's code never sees the
+  URLs you visit.
+- It can only affect `*.blake3.net` and `*.pkarr.net` addresses. It cannot
+  read page contents or access any other website.
+- Matching links are sent to the gateway on your own machine (`localhost`).
+- The only thing it stores is the gateway port, locally in the browser.
 
 ## Icons
 
@@ -136,6 +149,11 @@ rsvg-convert -w 32 -h 32 icon-small.svg -o icon-32.png
 rsvg-convert -w 16 -h 16 icon-small.svg -o icon-16.png
 ```
 
+Chrome Web Store images live in `store/`, each rendered from the SVG next to
+it: `screenshot.svg` (1280×800) and `promo-small.svg` (440×280). Both contain an
+inlined copy of `icon.svg`; update that copy after changing the icon. They are not
+part of the extension package.
+
 ## Tests
 
 ```sh
@@ -143,7 +161,7 @@ node --test iroh-link-extension/rules.test.js
 ```
 
 The tests check hash- and public-key-subdomain routing, path/query preservation, lookalike-host
-rejection, port validation, and disabling. They model matching and are not a
+rejection, and port validation. They model matching and are not a
 replacement for loading the extension in the browser.
 
 ## License
