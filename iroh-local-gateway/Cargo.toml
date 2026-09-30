@@ -61,6 +61,7 @@ n0-mainline.workspace = true
 percent-encoding = "2"
 postcard.workspace = true
 simple-dns = "0.12"
+hickory-proto = { version = "0.25", default-features = false, features = ["std"] }
 rand.workspace = true
 tokio.workspace = true
 tower-http = { version = "0.6", features = ["cors"] }

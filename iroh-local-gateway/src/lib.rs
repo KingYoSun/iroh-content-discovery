@@ -43,6 +43,7 @@ use percent_encoding::{AsciiSet, CONTROLS, NON_ALPHANUMERIC, utf8_percent_encode
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{Instrument, debug, debug_span, warn};
 
+mod debug_page;
 mod pkarr_redirect;
 mod provider_cache;
 mod providers;
@@ -734,6 +735,9 @@ pub(crate) async fn serve_root(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, HttpError> {
+    if has_flag(query.as_deref(), "debug") {
+        return Ok(debug_page::providers(gateway, hash).await);
+    }
     let download = has_flag(query.as_deref(), "download");
     // `?tree` skips automatic detection, but still enforces collection limits.
     // `?download` wins, and asks for the bytes.
@@ -833,6 +837,10 @@ pub(crate) async fn serve_path(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, HttpError> {
+    // Providers are per root hash, so `?debug` shows the same page on any path.
+    if has_flag(query.as_deref(), "debug") {
+        return Ok(debug_page::providers(&gateway, hash).await);
+    }
     let collection = tokio::time::timeout(LOOKUP_TIMEOUT, gateway.collection(hash))
         .await
         .map_err(HttpError::timeout)??;
