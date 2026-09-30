@@ -41,10 +41,10 @@ def stage(target):
         shutil.rmtree(destination)
     destination.mkdir(parents=True)
     suffix = '.exe' if 'windows' in target else ''
-    for binary in ['iroh-local-gateway', 'iroh-gateway-background']:
+    for binary in ['iroh-link-gateway', 'iroh-link-gateway-background']:
         shutil.copy2(ROOT / 'target' / target / 'release' / (binary + suffix), destination)
     for name in ['README.md', 'LICENSE-APACHE', 'LICENSE-MIT']:
-        shutil.copy2(ROOT / 'iroh-local-gateway' / name, destination)
+        shutil.copy2(ROOT / 'iroh-link-gateway' / name, destination)
     extensions(destination / 'extensions')
     return destination
 

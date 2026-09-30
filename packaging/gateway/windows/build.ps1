@@ -10,6 +10,6 @@ if (!(Test-Path $compiler)) {
 if (!(Test-Path $compiler)) { throw 'Inno Setup compiler not found' }
 & $compiler "/DAppVersion=$version" "/DBuildDir=$root\dist\gateway\x86_64-pc-windows-msvc" "$PSScriptRoot\gateway.iss"
 if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
-$installer = Get-Item "$root/dist/iroh-local-gateway-$version-windows-x64-setup.exe"
+$installer = Get-Item "$root/dist/iroh-link-gateway-$version-windows-x64-setup.exe"
 $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -Path "$($installer.FullName).sha256" -Value "$hash  $($installer.Name)" -Encoding ascii

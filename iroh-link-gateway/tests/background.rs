@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-const HELPER: &str = env!("CARGO_BIN_EXE_iroh-gateway-background");
+const HELPER: &str = env!("CARGO_BIN_EXE_iroh-link-gateway-background");
 struct StopOnDrop(PathBuf);
 impl Drop for StopOnDrop {
     fn drop(&mut self) {

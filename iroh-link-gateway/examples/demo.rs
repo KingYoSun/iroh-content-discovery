@@ -9,7 +9,7 @@ use std::{
 use clap::Parser;
 use iroh::{Endpoint, address_lookup::memory::MemoryLookup, endpoint::presets, protocol::Router};
 use iroh_blobs::{BlobsProtocol, store::fs::FsStore};
-use iroh_local_gateway::Gateway;
+use iroh_link_gateway::Gateway;
 use iroh_mainline_endpoint_discovery::{
     AddrIndex, BLAKE3_DOMAIN, PKARR_DOMAIN, PkarrPublisher, Publisher, Resolver,
     infohash_from_blake3, pkarr_name,

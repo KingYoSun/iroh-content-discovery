@@ -1,4 +1,4 @@
-# iroh-local-gateway
+# iroh-link-gateway
 
 A localhost HTTP gateway for content-addressed files, including video. This is
 workspace project four, adapted from the streaming approach in
@@ -13,7 +13,7 @@ another program without pulling in `clap` and `tracing-subscriber`.
 With the browser extension installed and enabled on port 45475:
 
 ```sh
-cargo run -p iroh-local-gateway --example demo -- /path/to/video.mp4
+cargo run -p iroh-link-gateway --example demo -- /path/to/video.mp4
 ```
 
 Open the printed `https://<public-key>.pkarr.net/` URL and leave the command
@@ -46,7 +46,7 @@ Ctrl-C stops the demo.
 For an isolated run without public DHT or relay services, opt in explicitly:
 
 ```sh
-cargo run -p iroh-local-gateway --example demo -- --local-testnet
+cargo run -p iroh-link-gateway --example demo -- --local-testnet
 ```
 
 This starts a local DHT and index server, and uses in-memory iroh address discovery.
@@ -55,7 +55,7 @@ Links from this mode work only through this demo's gateway.
 ## Standalone gateway
 
 ```sh
-cargo run -p iroh-local-gateway -- --listen 127.0.0.1:45475 --index-server 127.0.0.1:60125
+cargo run -p iroh-link-gateway -- --listen 127.0.0.1:45475 --index-server 127.0.0.1:60125
 ```
 
 Open:
@@ -99,7 +99,7 @@ encrypted and authenticated.
 Publish a test redirect and keep it alive with the included example:
 
 ```sh
-cargo run -p iroh-local-gateway --example pkarr-publish -- example.com
+cargo run -p iroh-link-gateway --example pkarr-publish -- example.com
 ```
 
 Leave it running alongside your gateway. After publication succeeds, open the
@@ -112,7 +112,7 @@ with `<hash>.blake3.net` and keep the content provider running too.
 By default each run generates a temporary identity. To reuse a public key:
 
 ```sh
-cargo run -p iroh-local-gateway --example pkarr-publish -- example.com --key-file /tmp/pkarr-test.key
+cargo run -p iroh-link-gateway --example pkarr-publish -- example.com --key-file /tmp/pkarr-test.key
 ```
 
 The example creates the file if missing (mode `0600` on Unix), or reads its
@@ -271,7 +271,7 @@ downloads.
 ## Tests
 
 ```sh
-cargo test -p iroh-local-gateway
+cargo test -p iroh-link-gateway
 ```
 
 The integration test uses a local Mainline testnet, a real index server, an iroh-blobs
@@ -285,12 +285,12 @@ Both the gateway and the demo honor `RUST_LOG`. To trace the full lookup and
 transfer path while keeping dependency logs quiet:
 
 ```sh
-RUST_LOG=info,iroh_local_gateway=debug,iroh_mainline_endpoint_discovery=debug,demo=debug \
-  cargo run -p iroh-local-gateway --example demo -- --port 8081
+RUST_LOG=info,iroh_link_gateway=debug,iroh_mainline_endpoint_discovery=debug,demo=debug \
+  cargo run -p iroh-link-gateway --example demo -- --port 8081
 ```
 
 Set the extension's port to the same value. Use the same `RUST_LOG` filter with
-`cargo run -p iroh-local-gateway -- ...` for a standalone gateway.
+`cargo run -p iroh-link-gateway -- ...` for a standalone gateway.
 Debug output includes request paths and response status/timing, Pkarr packet
 sequences and redirect destinations, server addresses and lookup results,
 selected endpoint IDs, connection timing/errors, cache hits, blob metadata,
@@ -322,24 +322,24 @@ Windows x64 uses an Inno Setup `.exe`; macOS Apple Silicon uses a current-user
 using port 45475 before installation.
 An occupied port fails startup without stopping the other application.
 
-- Windows installs in `%LOCALAPPDATA%\Programs\Iroh Gateway` with Start, Stop,
+- Windows installs in `%LOCALAPPDATA%\Programs\Iroh Link Gateway` with Start, Stop,
   extension instructions, and Uninstall entries in the Start menu.
-- macOS installs `Iroh Gateway.app`, Start/Stop commands, an uninstaller, and
-  `Iroh Gateway Extensions` under `~/Applications`. A per-user LaunchAgent runs
+- macOS installs `Iroh Link Gateway.app`, Start/Stop commands, an uninstaller, and
+  `Iroh Link Gateway Extensions` under `~/Applications`. A per-user LaunchAgent runs
   the gateway; Start registers it and Stop unregisters it. The app also starts
   the gateway when opened. Install for your account without `sudo`.
 
 Extensions are local files for manual installation; browser profiles are not
 modified. Open `extensions/Install extensions.html` on Windows or
-`~/Applications/Iroh Gateway Extensions/Install extensions.html` on macOS.
+`~/Applications/Iroh Link Gateway Extensions/Install extensions.html` on macOS.
 Chrome/Brave uses Developer mode and Load unpacked. Firefox supports a temporary
 add-on; the included unsigned XPI can be installed permanently in Developer
 Edition, Nightly, or ESR with signature enforcement disabled. Release Firefox
 requires Mozilla signing for permanent installation. The instructions link to
 Mozilla's requirements. No extension signing or publishing happens during builds.
 
-Settings and logs live in `%LOCALAPPDATA%\iroh-local-gateway` on Windows and
-`~/Library/Application Support/iroh-local-gateway` on macOS. `gateway.log` contains
+Settings and logs live in `%LOCALAPPDATA%\iroh-link-gateway` on Windows and
+`~/Library/Application Support/iroh-link-gateway` on macOS. `gateway.log` contains
 runtime logs; on gateway startup, logs larger than 5 MiB replace
 `gateway.previous.log` and `gateway.log` starts empty. Logs are not rotated while
 the gateway is running. `launcher.log` contains startup failures. Uninstall
@@ -355,13 +355,13 @@ while waiting. Startup readiness means the local listener is bound; discovery
 must succeed before content requests can be served.
 
 The local lifecycle files are separate from the HTTP content server. No HTTP
-administration endpoint is exposed. `iroh-gateway-background` starts the gateway;
+administration endpoint is exposed. `iroh-link-gateway-background` starts the gateway;
 its `stop` and `status` commands operate on the current user's instance. An optional
 `--state-dir` is available for isolated instances and testing.
 
 ### Building installers
 
-Build the `iroh-local-gateway` package's binaries for
+Build the `iroh-link-gateway` package's binaries for
 `x86_64-pc-windows-msvc` or `aarch64-apple-darwin` in release mode, then run:
 
 ```sh

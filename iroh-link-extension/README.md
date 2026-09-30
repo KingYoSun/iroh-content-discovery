@@ -40,7 +40,7 @@ The gateway validates public keys. Both domains use the same port.
 5. Start the gateway and open a content link:
 
    ```sh
-   cargo run -p iroh-local-gateway -- --index-server 127.0.0.1:60125
+   cargo run -p iroh-link-gateway -- --index-server 127.0.0.1:60125
    ```
 
 Use your own index server address, or the gateway's key and infohash discovery

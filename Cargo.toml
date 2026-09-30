@@ -3,7 +3,7 @@ members = [
     "udp-addr-index-proto",
     "udp-addr-index",
     "iroh-mainline-endpoint-discovery",
-    "iroh-local-gateway",
+    "iroh-link-gateway",
 ]
 resolver = "3"
 

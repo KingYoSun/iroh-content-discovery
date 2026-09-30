@@ -9,7 +9,7 @@ use std::{
 pub fn default_state_dir() -> Result<PathBuf> {
     Ok(dirs::data_local_dir()
         .std_context("cannot determine user data directory")?
-        .join("iroh-local-gateway"))
+        .join("iroh-link-gateway"))
 }
 
 pub fn lock(path: &Path) -> Result<File> {
