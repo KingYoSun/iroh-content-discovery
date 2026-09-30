@@ -40,7 +40,7 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "blake3-link-gateway@iroh.computer",
+      "id": "iroh-link@iroh.computer",
       "strict_min_version": "140.0",
       "data_collection_permissions": {
         "required": [
