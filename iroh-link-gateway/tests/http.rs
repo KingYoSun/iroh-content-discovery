@@ -7,7 +7,7 @@ use std::{
 
 use iroh::{Endpoint, address_lookup::memory::MemoryLookup, endpoint::presets, protocol::Router};
 use iroh_blobs::{BlobsProtocol, Hash, format::collection::Collection, store::mem::MemStore};
-use iroh_local_gateway::Gateway;
+use iroh_link_gateway::Gateway;
 use iroh_mainline_endpoint_discovery::{AddrIndex, Resolver, infohash_from_blake3};
 use n0_mainline::Dht;
 use reqwest::{Client, StatusCode};

@@ -12,7 +12,7 @@ use std::{
 use clap::Parser;
 use data_encoding::HEXLOWER_PERMISSIVE;
 use iroh::endpoint::presets;
-use iroh_local_gateway::{Gateway, validate_listen_addr};
+use iroh_link_gateway::{Gateway, validate_listen_addr};
 use iroh_mainline_endpoint_discovery::{
     AddrIndex, AddrIndexBuilder, Resolver, decode_signed_packet, encode_signed_packet,
 };

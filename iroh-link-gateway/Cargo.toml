@@ -1,5 +1,5 @@
 [package]
-name = "iroh-local-gateway"
+name = "iroh-link-gateway"
 description = "Local HTTP streaming gateway for BLAKE3 content discovered through Mainline"
 version.workspace = true
 edition.workspace = true
@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 readme = "README.md"
-default-run = "iroh-local-gateway"
+default-run = "iroh-link-gateway"
 
 [features]
 default = ["cli"]
@@ -16,13 +16,13 @@ default = ["cli"]
 cli = ["dep:clap", "dep:data-encoding", "dep:tracing-subscriber", "dep:dirs", "dep:serde_json", "dep:plist", "dep:windows-sys"]
 
 [[bin]]
-name = "iroh-local-gateway"
+name = "iroh-link-gateway"
 path = "src/main.rs"
 required-features = ["cli"]
 
 [[bin]]
-name = "iroh-gateway-background"
-path = "src/bin/iroh-gateway-background.rs"
+name = "iroh-link-gateway-background"
+path = "src/bin/iroh-link-gateway-background.rs"
 required-features = ["cli"]
 
 [[test]]

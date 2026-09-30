@@ -40,7 +40,7 @@ The gateway validates public keys. Both domains use the same port.
 5. Start the gateway and open a content link:
 
    ```sh
-   cargo run -p iroh-local-gateway -- --index-server 127.0.0.1:60125
+   cargo run -p iroh-link-gateway -- --index-server 127.0.0.1:60125
    ```
 
 Use your own index server address, or the gateway's key and infohash discovery
@@ -150,7 +150,7 @@ rsvg-convert -w 16 -h 16 icon-small.svg -o icon-16.png
 ```
 
 The gateway installers use the same artwork:
-`packaging/gateway/windows/iroh-gateway.ico` (16–32 px from `icon-small.svg`,
+`packaging/gateway/windows/iroh-link-gateway.ico` (16–32 px from `icon-small.svg`,
 48–256 px from `icon.svg`) and `packaging/gateway/macos/AppIcon.icns` (built
 with `iconutil` from an iconset rendered the same way). Regenerate both after
 changing the icon.

@@ -69,9 +69,9 @@ async fn run(state: &Path, action: Option<Action>) -> Result<()> {
 }
 fn gateway() -> Result<PathBuf> {
     Ok(std::env::current_exe()?.with_file_name(if cfg!(windows) {
-        "iroh-local-gateway.exe"
+        "iroh-link-gateway.exe"
     } else {
-        "iroh-local-gateway"
+        "iroh-link-gateway"
     }))
 }
 fn arguments(state: &Path) -> Result<Vec<String>> {

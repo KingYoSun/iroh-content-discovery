@@ -62,7 +62,7 @@ The repository contains four Rust workspace crates and a browser extension:
 - `iroh-mainline-endpoint-discovery`: the `AddrIndex`, `Publisher` and
   `Resolver` APIs; the publisher takes an endpoint secret key and a Mainline
   node that the caller owns
-- `iroh-local-gateway`: localhost HTTP streaming, MIME detection, and byte ranges
+- `iroh-link-gateway`: localhost HTTP streaming, MIME detection, and byte ranges
 - `iroh-link-extension`: redirects hash and key subdomains to the gateway in
   Chrome, Brave and Firefox
 
@@ -206,7 +206,7 @@ Configure clients with that name's public key. The gateway accepts the bare
 z-base-32 key displayed by iroh-share (without `https://` or `.pkarr.net`):
 
 ```sh
-iroh-local-gateway --index-list-key <pkarr-public-key>
+iroh-link-gateway --index-list-key <pkarr-public-key>
 ```
 
 Without `--index-list-key`, the gateway uses `DEFAULT_INDEX_LIST_KEY`. Add
@@ -253,7 +253,7 @@ task of their own; dropping that future stops renewal without stopping the DHT.
 
 ## Local HTTP content gateway
 
-The fourth workspace project, [`iroh-local-gateway`](iroh-local-gateway/README.md),
+The fourth workspace project, [`iroh-link-gateway`](iroh-link-gateway/README.md),
 serves `http://127.0.0.1:45475/blake3/<z32>`. It finds a provider through Mainline
 and the address index, then streams Bao-verified bytes with MIME detection
 and HTTP range support for video seeking. Collection roots automatically show
@@ -271,7 +271,7 @@ Query flags:
 - `?sizes` adds file sizes to a listing.
 
 ```sh
-cargo run -p iroh-local-gateway -- --index-server 127.0.0.1:60125
+cargo run -p iroh-link-gateway -- --index-server 127.0.0.1:60125
 ```
 
 To serve content, the `provide` example adds a file or directory as blobs plus

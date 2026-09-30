@@ -1,7 +1,7 @@
 //! Per-user LaunchAgent registration used by the macOS installer.
 use super::*;
 
-const LABEL: &str = "computer.n0.iroh-local-gateway";
+const LABEL: &str = "computer.n0.iroh-link-gateway";
 
 fn domain() -> Result<String> {
     let output = Command::new("/usr/bin/id").arg("-u").output()?;
@@ -12,7 +12,7 @@ fn domain() -> Result<String> {
         .anyerr()?;
     n0_error::ensure_any!(
         uid != 0,
-        "install Iroh Gateway for the logged-in user, without sudo"
+        "install Iroh Link Gateway for the logged-in user, without sudo"
     );
     let gui = format!("gui/{uid}");
     if Command::new("/bin/launchctl")
@@ -71,7 +71,7 @@ fn definition(executable: &Path, home: &Path, state: &Path, args: Vec<String>) -
     values.insert("ExitTimeOut".into(), 30_u64.into());
     values.insert(
         "AssociatedBundleIdentifiers".into(),
-        plist::Value::Array(vec!["computer.n0.iroh-local-gateway".into()]),
+        plist::Value::Array(vec!["computer.n0.iroh-link-gateway".into()]),
     );
     for key in ["StandardOutPath", "StandardErrorPath"] {
         values.insert(
@@ -87,7 +87,7 @@ fn definition(executable: &Path, home: &Path, state: &Path, args: Vec<String>) -
 }
 pub async fn install(state: &Path) -> Result<()> {
     let home = dirs::home_dir().std_context("cannot determine home directory")?;
-    let executable = std::env::current_exe()?.with_file_name("iroh-local-gateway");
+    let executable = std::env::current_exe()?.with_file_name("iroh-link-gateway");
     n0_error::ensure_any!(
         executable.is_file(),
         "the daemon must be installed beside its helper"
@@ -141,9 +141,9 @@ mod tests {
     #[test]
     fn launch_agent_preserves_paths_and_only_restarts_failed_exits() -> Result<()> {
         let home = Path::new("/Users/A & B");
-        let state = home.join("Library/Application Support/iroh-local-gateway");
+        let state = home.join("Library/Application Support/iroh-link-gateway");
         let executable =
-            home.join("Applications/Iroh Gateway.app/Contents/MacOS/iroh-local-gateway");
+            home.join("Applications/Iroh Link Gateway.app/Contents/MacOS/iroh-link-gateway");
         let expected = definition(&executable, home, &state, vec![]);
         let mut bytes = Vec::new();
         expected.to_writer_xml(&mut bytes).anyerr()?;

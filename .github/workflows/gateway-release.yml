@@ -4,7 +4,7 @@ on:
     tags: ['gateway-v*']
   pull_request:
     paths:
-      - 'iroh-local-gateway/**'
+      - 'iroh-link-gateway/**'
       - 'iroh-link-extension/**'
       - 'packaging/gateway/**'
       - '.github/workflows/gateway-release.yml'
@@ -46,8 +46,8 @@ jobs:
           node-version: '22'
       - run: node --test iroh-link-extension/rules.test.js
       - run: python -m unittest discover -s packaging/gateway -p 'test_*.py'
-      - run: cargo test -p iroh-local-gateway --locked --bins --test background
-      - run: cargo build --release --locked -p iroh-local-gateway --bins --target ${{ matrix.target }}
+      - run: cargo test -p iroh-link-gateway --locked --bins --test background
+      - run: cargo build --release --locked -p iroh-link-gateway --bins --target ${{ matrix.target }}
       - run: python packaging/gateway/stage.py ${{ matrix.target }}
       - name: Build and test Windows installer
         if: runner.os == 'Windows'

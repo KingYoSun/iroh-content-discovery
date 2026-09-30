@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use iroh::{Endpoint, address_lookup::memory::MemoryLookup, endpoint::presets, protocol::Router};
 use iroh_blobs::{BlobsProtocol, Hash, store::mem::MemStore};
-use iroh_local_gateway::filter_verified_providers;
+use iroh_link_gateway::filter_verified_providers;
 use n0_future::{StreamExt, stream};
 
 async fn endpoint() -> Endpoint {

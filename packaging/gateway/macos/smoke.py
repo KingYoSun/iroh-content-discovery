@@ -8,10 +8,10 @@ if os.environ.get('CI') != 'true':
     raise SystemExit('Run this installation test only on an ephemeral CI runner')
 root = Path(__file__).resolve().parents[3]
 home = Path.home()
-app = home / 'Applications/Iroh Gateway.app'
-extensions = home / 'Applications/Iroh Gateway Extensions'
-state = home / 'Library/Application Support/iroh-local-gateway'
-agent = home / 'Library/LaunchAgents/computer.n0.iroh-local-gateway.plist'
+app = home / 'Applications/Iroh Link Gateway.app'
+extensions = home / 'Applications/Iroh Link Gateway Extensions'
+state = home / 'Library/Application Support/iroh-link-gateway'
+agent = home / 'Library/LaunchAgents/computer.n0.iroh-link-gateway.plist'
 if app.exists() or agent.exists():
     raise SystemExit('Refusing to replace an existing installation')
 logs = root / 'installer-test-logs'
@@ -28,7 +28,7 @@ def install(label):
     assert result.returncode == 0, result.stdout + result.stderr
 
 def status():
-    subprocess.run([str(app / 'Contents/MacOS/iroh-gateway-background'), 'status'], check=True, timeout=30)
+    subprocess.run([str(app / 'Contents/MacOS/iroh-link-gateway-background'), 'status'], check=True, timeout=30)
     assert (state / 'ready').exists()
     with socket.create_connection(('127.0.0.1', 18080), timeout=5):
         pass
@@ -43,7 +43,7 @@ try:
     install('upgrade')
     status()
     assert (state / 'arguments.json').read_text() == settings
-    result = subprocess.run(['/bin/sh', str(home / 'Applications/Uninstall Iroh Gateway.command'), '--yes'],
+    result = subprocess.run(['/bin/sh', str(home / 'Applications/Uninstall Iroh Link Gateway.command'), '--yes'],
                             capture_output=True, text=True, timeout=90)
     (logs / 'uninstall.log').write_text(result.stdout + result.stderr)
     assert result.returncode == 0, result.stdout + result.stderr

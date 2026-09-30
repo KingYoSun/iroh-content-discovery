@@ -10,23 +10,23 @@ import xml.etree.ElementTree as ET
 
 root = pathlib.Path(__file__).resolve().parents[3]
 version = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["package"]["version"]
-identifier = "computer.n0.iroh-local-gateway.user"
+identifier = "computer.n0.iroh-link-gateway.user"
 dist = root / "dist"
-with tempfile.TemporaryDirectory(prefix="iroh-local-gateway-pkg-") as temporary:
+with tempfile.TemporaryDirectory(prefix="iroh-link-gateway-pkg-") as temporary:
     work = pathlib.Path(temporary)
     staged = root / "dist/gateway/aarch64-apple-darwin"
     payload = work / "payload"
     applications = payload / "Applications"
-    contents = applications / "Iroh Gateway.app/Contents"
+    contents = applications / "Iroh Link Gateway.app/Contents"
     binaries = contents / "MacOS"
     binaries.mkdir(parents=True)
-    for binary in ["iroh-local-gateway", "iroh-gateway-background"]:
+    for binary in ["iroh-link-gateway", "iroh-link-gateway-background"]:
         shutil.copy2(staged / binary, binaries / binary)
     with (contents / "Info.plist").open("wb") as file:
         plistlib.dump({
-            "CFBundleExecutable": "iroh-gateway-background",
-            "CFBundleIdentifier": "computer.n0.iroh-local-gateway",
-            "CFBundleName": "Iroh Gateway",
+            "CFBundleExecutable": "iroh-link-gateway-background",
+            "CFBundleIdentifier": "computer.n0.iroh-link-gateway",
+            "CFBundleName": "Iroh Link Gateway",
             "CFBundlePackageType": "APPL",
             "CFBundleIconFile": "AppIcon",
             "CFBundleShortVersionString": version,
@@ -40,14 +40,14 @@ with tempfile.TemporaryDirectory(prefix="iroh-local-gateway-pkg-") as temporary:
         shutil.copy2(staged / name, resources / name)
     shutil.copy2(root / "packaging/gateway/macos/AppIcon.icns", resources / "AppIcon.icns")
     subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(contents.parent)], check=True)
-    shutil.copytree(staged / "extensions", applications / "Iroh Gateway Extensions")
+    shutil.copytree(staged / "extensions", applications / "Iroh Link Gateway Extensions")
     for action in ["Start", "Stop"]:
-        script = applications / f"{action} Iroh Gateway.command"
+        script = applications / f"{action} Iroh Link Gateway.command"
         command = "install-agent" if action == "Start" else "remove-agent"
-        script.write_text('#!/bin/sh\nset -eu\n"$HOME/Applications/Iroh Gateway.app/Contents/MacOS/iroh-gateway-background" ' + command + '\n')
+        script.write_text('#!/bin/sh\nset -eu\n"$HOME/Applications/Iroh Link Gateway.app/Contents/MacOS/iroh-link-gateway-background" ' + command + '\n')
         script.chmod(0o755)
-    uninstaller = applications / "Uninstall Iroh Gateway.command"
-    shutil.copy2(root / "packaging/gateway/macos/Uninstall Iroh Gateway.command", uninstaller)
+    uninstaller = applications / "Uninstall Iroh Link Gateway.command"
+    shutil.copy2(root / "packaging/gateway/macos/Uninstall Iroh Link Gateway.command", uninstaller)
     uninstaller.chmod(0o755)
     scripts = work / "scripts"
     shutil.copytree(root / "packaging/gateway/macos/scripts", scripts)
@@ -62,12 +62,12 @@ with tempfile.TemporaryDirectory(prefix="iroh-local-gateway-pkg-") as temporary:
         component["BundleOverwriteAction"] = "upgrade"
     with components.open("wb") as file:
         plistlib.dump(settings, file)
-    component_pkg = work / "Iroh Gateway-component.pkg"
+    component_pkg = work / "Iroh Link Gateway-component.pkg"
     subprocess.run(["pkgbuild", "--root", str(payload), "--component-plist", str(components),
                     "--scripts", str(scripts), "--identifier", identifier, "--version", version,
                     "--install-location", "/", str(component_pkg)], check=True)
     distribution = ET.Element("installer-gui-script", {"minSpecVersion": "2"})
-    ET.SubElement(distribution, "title").text = "Iroh Gateway"
+    ET.SubElement(distribution, "title").text = "Iroh Link Gateway"
     ET.SubElement(distribution, "welcome", {"file": "welcome.html"})
     ET.SubElement(distribution, "conclusion", {"file": "conclusion.html"})
     ET.SubElement(distribution, "options", {"customize": "never", "require-scripts": "true", "hostArchitectures": "arm64"})
@@ -81,7 +81,7 @@ with tempfile.TemporaryDirectory(prefix="iroh-local-gateway-pkg-") as temporary:
     ET.SubElement(distribution, "pkg-ref", {"id": identifier, "version": version, "auth": "none"}).text = component_pkg.name
     xml = work / "Distribution.xml"
     ET.ElementTree(distribution).write(xml, encoding="utf-8", xml_declaration=True)
-    package = dist / f"iroh-local-gateway-{version}-macos-arm64.pkg"
+    package = dist / f"iroh-link-gateway-{version}-macos-arm64.pkg"
     subprocess.run(["productbuild", "--distribution", str(xml), "--package-path", str(work),
                     "--resources", str(root / "packaging/gateway/macos/resources"), str(package)], check=True)
     with package.open("rb") as file:
