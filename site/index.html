@@ -13,10 +13,34 @@
 <h1>iroh content links</h1>
 <p>Links on <code>*.blake3.net</code> and <code>*.pkarr.net</code> open content
 from peers over iroh, through a gateway running on your own machine.</p>
-<ul>
-  <li><a href="https://github.com/n0-computer/iroh-content-discovery/tree/main/iroh-link-extension">iroh link browser extension</a></li>
-  <li><a href="https://github.com/n0-computer/iroh-content-discovery/releases">Gateway downloads</a></li>
-  <li><a href="https://github.com/n0-computer/iroh-share/releases">iroh-share downloads</a></li>
-</ul>
+
+<h2>How the links work</h2>
+<p>A link like <code>https://&lt;hash&gt;.blake3.net/file</code> names content
+by its BLAKE3 hash. Your local gateway finds a peer that has the content,
+fetches it directly from them, and checks it against the hash, so it doesn't
+matter who serves it.</p>
+<p>A link like <code>https://&lt;key&gt;.pkarr.net/</code> names a public key.
+The key's owner publishes a signed record saying what the name points to, and
+can update it at any time. Your gateway looks up the record, verifies the
+signature, and opens the content it points to.</p>
+<p>blake3.net and pkarr.net never see these requests: the browser extension sends the links
+straight to the gateway on your machine. Without the extension and gateway, the
+links don't open.</p>
+
+<h2>Get started</h2>
+<ol>
+  <li>Install the <a href="https://github.com/n0-computer/iroh-content-discovery/releases">gateway</a>
+    for Windows or macOS. It runs in the background.</li>
+  <li>Install the <a href="https://github.com/n0-computer/iroh-content-discovery/tree/main/iroh-link-extension">iroh link browser extension</a>
+    for Chrome, Brave or Firefox.</li>
+  <li>Open a <code>blake3.net</code> or <code>pkarr.net</code> link, for example:
+    <ul>
+      <li><a href="https://y7rmokt6h5mryuauw83em4u1br6tqrukaw3ngtde7zp8p3bg6hto.blake3.net/">A collection of public domain content</a>
+        by hash</li>
+      <li><a href="https://5ti57aszf7kaicsncb4wgigkf9bju39kofiz8dthwdujkmz85u8y.pkarr.net/">The same collection</a>
+        by public key</li>
+    </ul>
+  </li>
+</ol>
 </body>
 </html>
