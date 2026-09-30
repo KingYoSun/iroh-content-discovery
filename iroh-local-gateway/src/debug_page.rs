@@ -78,7 +78,7 @@ pub(crate) async fn pkarr(gateway: &Gateway, key: &[u8; 32], encoded: &str) -> R
     };
     let note = mainline_note(tokio::time::timeout(MAINLINE_TIMEOUT, lookup).await);
     let mut body = format!(
-        "<p class=\"meta\">{} answers from Mainline in {:.1} s. Bypasses all caches.</p>\n",
+        "<p class=\"meta\">{} answers from Mainline in {:.1} s.</p>\n",
         items.len(),
         started.elapsed().as_secs_f64(),
     );
@@ -121,19 +121,10 @@ pub(crate) async fn pkarr(gateway: &Gateway, key: &[u8; 32], encoded: &str) -> R
                     html_escape(&error)
                 )),
             }
-            let target = Packet::parse(item.value())
+            content = Packet::parse(item.value())
                 .ok()
-                .and_then(|packet| pkarr_redirect::target(&packet, encoded));
-            match target {
-                None => body.push_str("<p class=\"meta\">No supported apex HTTPS target.</p>\n"),
-                Some(authority) => {
-                    body.push_str(&format!(
-                        "<p class=\"meta\">Points to https://{}/</p>\n",
-                        html_escape(&authority)
-                    ));
-                    content = pkarr_redirect::content_hash(&authority);
-                }
-            }
+                .and_then(|packet| pkarr_redirect::target(&packet, encoded))
+                .and_then(|authority| pkarr_redirect::content_hash(&authority));
         }
     }
     if let Some(hash) = content {
@@ -280,8 +271,7 @@ fn render_providers(
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_secs());
     let mut html = format!(
-        "<p class=\"meta\">{} peers from Mainline, {} endpoints, in {:.1} s. \
-         Bypasses all caches.</p>\n",
+        "<p class=\"meta\">{} peers from Mainline, {} endpoints, in {:.1} s.</p>\n",
         peers.len(),
         probes.len(),
         elapsed.as_secs_f64(),
