@@ -1,4 +1,4 @@
-"""Pack the staged Linux gateway into a tar archive."""
+"""Pack the staged Linux gateway, its install script, and systemd units into a tar archive."""
 import pathlib
 import sys
 import tarfile
@@ -19,6 +19,8 @@ def build(target):
     archive = ROOT / 'dist' / (name + '.tar.gz')
     with tarfile.open(archive, 'w:gz') as tar:
         tar.add(ROOT / 'dist/gateway' / target, arcname=name, filter=normalize)
+        for extra in ['install.sh', 'systemd']:
+            tar.add(pathlib.Path(__file__).with_name(extra), arcname=f'{name}/{extra}', filter=normalize)
     checksum(archive)
     return archive
 

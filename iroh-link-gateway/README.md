@@ -336,10 +336,23 @@ An occupied port fails startup without stopping the other application.
   the gateway; Start registers it and Stop unregisters it. The app also starts
   the gateway when opened. Install for your account without `sudo`.
 
-Linux x64 and arm64 get a `.tar.gz` of statically linked binaries instead of an
-installer. Unpack it anywhere and run `iroh-gateway-background` to start the
-gateway; nothing is registered to start it at login. The extension files are in
-the archive's `extensions` directory.
+Linux x64 and arm64 get a `.tar.gz` of statically linked binaries with an
+`install.sh` script and systemd units:
+
+- `sudo ./install.sh` installs the binaries in `/usr/local/bin` and the extension
+  files in `/usr/local/share/iroh-link-gateway/extensions`, then enables and
+  starts the system service `iroh-link-gateway.service`. The service runs as a
+  dynamic unprivileged user and starts at boot.
+- `./install.sh --user` installs the binaries in `~/.local/bin` and the extension
+  files in `~/.local/share/iroh-link-gateway/extensions`, then enables and
+  starts a systemd user service of the same name, which runs while you are
+  logged in. Run it without `sudo`.
+- Add `--uninstall` to either command to stop the service and remove those files.
+
+Running `install.sh` again upgrades the installation and restarts the service.
+Without systemd the files are installed and nothing is started. The binaries
+also run straight from the unpacked archive: `iroh-link-gateway-background` starts
+the gateway without registering anything.
 
 Extensions are local files for manual installation; browser profiles are not
 modified. Open `extensions/Install extensions.html` on Windows or
@@ -352,8 +365,8 @@ Mozilla's requirements. No extension signing or publishing happens during builds
 
 Settings and logs live in `%LOCALAPPDATA%\iroh-link-gateway` on Windows,
 `~/Library/Application Support/iroh-link-gateway` on macOS, and
-`~/.local/share/iroh-link-gateway` (or `$XDG_DATA_HOME/iroh-link-gateway`) on
-Linux. `gateway.log` contains
+`~/.local/share/iroh-link-gateway` on Linux, or `/var/lib/iroh-link-gateway`
+for the Linux system service. `gateway.log` contains
 runtime logs; on gateway startup, logs larger than 5 MiB replace
 `gateway.previous.log` and `gateway.log` starts empty. Logs are not rotated while
 the gateway is running. `launcher.log` contains startup failures. Uninstall
@@ -364,6 +377,15 @@ their files.
 For example, `["--listen", "127.0.0.1:8081"]` selects another port. Stop the gateway,
 edit the file, and start it again; use the same port in the browser extension.
 On macOS, use the Start command to update the LaunchAgent's arguments.
+The systemd services do not read `arguments.json` and log to the journal instead
+of `gateway.log`. Run `systemctl edit iroh-link-gateway` (with `--user` for the
+user service), add the lines below, and restart the service:
+
+```ini
+[Service]
+Environment="IROH_GATEWAY_ARGS=--listen 127.0.0.1:8081"
+```
+
 The background gateway retries index discovery while offline and can be stopped
 while waiting. Startup readiness means the local listener is bound; discovery
 must succeed before content requests can be served.
@@ -392,8 +414,8 @@ python packaging/gateway/linux/build.py <target>
 Installers, Linux archives, and SHA-256 files are written to `dist/`. The macOS
 app is ad-hoc signed; the installer is not Developer ID signed or notarized. Windows installers are
 unsigned. Native install/upgrade/uninstall smoke tests run on ephemeral CI runners;
-the Linux smoke test unpacks the archive and starts and stops the gateway in a
-temporary directory.
+the Linux smoke test also starts and stops the gateway from the unpacked archive
+in a temporary directory, which is the only part that runs outside CI.
 The `Gateway installers` workflow builds PR artifacts and supports manual runs;
-only `gateway-v*` tags publish GitHub release assets. No Linux installer or Intel
-macOS binary is built.
+only `gateway-v*` tags publish GitHub release assets. No Linux distribution
+package or Intel macOS binary is built.
