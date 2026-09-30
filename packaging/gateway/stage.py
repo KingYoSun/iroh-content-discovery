@@ -8,7 +8,8 @@ import tomllib
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
-FILES = ['background.js', 'rules.js', 'popup.html', 'popup.js', 'popup.css', 'LICENSE-APACHE', 'LICENSE-MIT']
+FILES = ['background.js', 'rules.js', 'popup.html', 'popup.js', 'popup.css',
+         'icon-16.png', 'icon-32.png', 'icon-48.png', 'icon-128.png', 'LICENSE-APACHE', 'LICENSE-MIT']
 
 def checksum(path):
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
