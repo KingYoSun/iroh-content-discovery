@@ -101,6 +101,12 @@ pub(crate) async fn redirect(
             (key, format!("/{path}"))
         });
     let key = parse_key(encoded)?;
+    if crate::has_flag(uri.query(), "debug") {
+        let host = subdomain
+            .as_ref()
+            .and_then(|_| headers.get(header::HOST)?.to_str().ok());
+        return Ok(crate::debug_page::pkarr(&gateway, &key, encoded, host).await);
+    }
     let started = std::time::Instant::now();
     debug!(key = encoded, "resolving Pkarr record");
     let cached = gateway
@@ -186,7 +192,7 @@ pub(crate) async fn redirect(
 }
 
 /// Returns the hash when a target names content, as `<z32>.blake3.net`.
-fn content_hash(authority: &str) -> Option<iroh_blobs::Hash> {
+pub(crate) fn content_hash(authority: &str) -> Option<iroh_blobs::Hash> {
     let label = authority.strip_suffix(BLAKE3_DOMAIN)?.strip_suffix('.')?;
     parse_hash(label).ok()
 }
@@ -262,7 +268,7 @@ fn verified(
     Ok(item)
 }
 
-fn target(packet: &Packet<'_>, key: &str) -> Option<String> {
+pub(crate) fn target(packet: &Packet<'_>, key: &str) -> Option<String> {
     packet
         .answers
         .iter()

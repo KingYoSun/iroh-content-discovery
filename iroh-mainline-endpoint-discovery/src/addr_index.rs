@@ -438,7 +438,8 @@ impl AddrIndex {
         Ok(records)
     }
 
-    async fn lookup_uncached(
+    /// Like [`Self::lookup`], but always asks the servers, even with a lookup cache.
+    pub async fn lookup_uncached(
         &self,
         addr: SocketAddrV4,
     ) -> Result<Vec<SignedRecord>, AddrIndexError> {

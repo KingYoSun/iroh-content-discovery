@@ -22,21 +22,23 @@ OutputBaseFilename=iroh-link-gateway-{#AppVersion}-windows-x64-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayIcon={app}\iroh-link-gateway-background.exe
+SetupIconFile=iroh-link-gateway.ico
+UninstallDisplayIcon={app}\iroh-link-gateway.ico
 CloseApplications=yes
 RestartApplications=no
 SetupLogging=yes
 
 [Files]
 Source: "{#BuildDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "iroh-link-gateway.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Iroh Link Gateway"; ValueData: """{app}\iroh-link-gateway-background.exe"""; Flags: uninsdeletevalue
 
 [Icons]
 Name: "{group}\Install browser extensions"; Filename: "{app}\extensions\Install extensions.html"
-Name: "{group}\Start gateway"; Filename: "{app}\iroh-link-gateway-background.exe"; WorkingDir: "{app}"
-Name: "{group}\Stop gateway"; Filename: "{app}\iroh-link-gateway-background.exe"; Parameters: "stop"; WorkingDir: "{app}"
+Name: "{group}\Start gateway"; Filename: "{app}\iroh-link-gateway-background.exe"; WorkingDir: "{app}"; IconFilename: "{app}\iroh-link-gateway.ico"
+Name: "{group}\Stop gateway"; Filename: "{app}\iroh-link-gateway-background.exe"; Parameters: "stop"; WorkingDir: "{app}"; IconFilename: "{app}\iroh-link-gateway.ico"
 Name: "{group}\Uninstall Iroh Link Gateway"; Filename: "{uninstallexe}"
 
 [Run]

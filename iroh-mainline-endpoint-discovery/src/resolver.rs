@@ -32,6 +32,11 @@ impl Resolver {
         &self.dht
     }
 
+    /// Returns the address index peers are looked up in.
+    pub fn index(&self) -> &AddrIndex {
+        &self.index
+    }
+
     /// Creates a resolver from a shared Mainline node and an address index.
     pub fn new(dht: Dht, index: AddrIndex) -> Self {
         Self { dht, index }
