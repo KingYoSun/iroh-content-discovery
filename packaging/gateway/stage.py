@@ -42,7 +42,9 @@ def stage(target):
         shutil.rmtree(destination)
     destination.mkdir(parents=True)
     suffix = '.exe' if 'windows' in target else ''
-    for binary in ['iroh-link-gateway', 'iroh-link-gateway-background']:
+    # Linux runs the gateway under systemd, which replaces the background launcher.
+    binaries = ['iroh-link-gateway'] if 'linux' in target else ['iroh-link-gateway', 'iroh-link-gateway-background']
+    for binary in binaries:
         shutil.copy2(ROOT / 'target' / target / 'release' / (binary + suffix), destination)
     for name in ['README.md', 'LICENSE-APACHE', 'LICENSE-MIT']:
         shutil.copy2(ROOT / 'iroh-link-gateway' / name, destination)

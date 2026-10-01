@@ -336,23 +336,23 @@ An occupied port fails startup without stopping the other application.
   the gateway; Start registers it and Stop unregisters it. The app also starts
   the gateway when opened. Install for your account without `sudo`.
 
-Linux x64 and arm64 get a `.tar.gz` of statically linked binaries with an
-`install.sh` script and systemd units:
+Linux x64 and arm64 get a `.tar.gz` with a statically linked `iroh-link-gateway`,
+an `install.sh` script, and systemd units. systemd starts, stops, and restarts
+the gateway, so the Linux archive has no `iroh-link-gateway-background` launcher.
 
-- `sudo ./install.sh` installs the binaries in `/usr/local/bin` and the extension
+- `sudo ./install.sh` installs the gateway in `/usr/local/bin` and the extension
   files in `/usr/local/share/iroh-link-gateway/extensions`, then enables and
   starts the system service `iroh-link-gateway.service`. The service runs as a
   dynamic unprivileged user and starts at boot.
-- `./install.sh --user` installs the binaries in `~/.local/bin` and the extension
+- `./install.sh --user` installs the gateway in `~/.local/bin` and the extension
   files in `~/.local/share/iroh-link-gateway/extensions`, then enables and
   starts a systemd user service of the same name, which runs while you are
   logged in. Run it without `sudo`.
 - Add `--uninstall` to either command to stop the service and remove those files.
 
 Running `install.sh` again upgrades the installation and restarts the service.
-Without systemd the files are installed and nothing is started. The binaries
-also run straight from the unpacked archive: `iroh-link-gateway-background` starts
-the gateway without registering anything.
+Without systemd the files are installed and nothing is started. The gateway also
+runs straight from the unpacked archive as `./iroh-link-gateway`.
 
 Extensions are local files for manual installation; browser profiles are not
 modified. Open `extensions/Install extensions.html` on Windows or
@@ -363,10 +363,8 @@ Edition, Nightly, or ESR with signature enforcement disabled. Release Firefox
 requires Mozilla signing for permanent installation. The instructions link to
 Mozilla's requirements. No extension signing or publishing happens during builds.
 
-Settings and logs live in `%LOCALAPPDATA%\iroh-link-gateway` on Windows,
-`~/Library/Application Support/iroh-link-gateway` on macOS, and
-`~/.local/share/iroh-link-gateway` on Linux, or `/var/lib/iroh-link-gateway`
-for the Linux system service. `gateway.log` contains
+Settings and logs live in `%LOCALAPPDATA%\iroh-link-gateway` on Windows and
+`~/Library/Application Support/iroh-link-gateway` on macOS. `gateway.log` contains
 runtime logs; on gateway startup, logs larger than 5 MiB replace
 `gateway.previous.log` and `gateway.log` starts empty. Logs are not rotated while
 the gateway is running. `launcher.log` contains startup failures. Uninstall
@@ -377,8 +375,10 @@ their files.
 For example, `["--listen", "127.0.0.1:8081"]` selects another port. Stop the gateway,
 edit the file, and start it again; use the same port in the browser extension.
 On macOS, use the Start command to update the LaunchAgent's arguments.
-The systemd services do not read `arguments.json` and log to the journal instead
-of `gateway.log`. Run `systemctl edit iroh-link-gateway` (with `--user` for the
+On Linux, the systemd services keep their state in `/var/lib/iroh-link-gateway`
+for the system service and `~/.local/state/iroh-link-gateway` (or
+`$XDG_STATE_HOME/iroh-link-gateway`) for the user service. They do not read
+`arguments.json` and log to the journal instead of `gateway.log`. Run `systemctl edit iroh-link-gateway` (with `--user` for the
 user service), add the lines below, and restart the service:
 
 ```ini

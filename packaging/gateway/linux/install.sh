@@ -59,7 +59,7 @@ if $uninstall; then
     if $systemd && [ -e "$units/$service" ]; then
         $systemctl disable --now "$service"
     fi
-    rm -f "$units/$service" "$bin/iroh-link-gateway" "$bin/iroh-link-gateway-background"
+    rm -f "$units/$service" "$bin/iroh-link-gateway"
     rm -rf "$share/extensions"
     if $systemd; then
         $systemctl daemon-reload
@@ -70,7 +70,7 @@ fi
 
 mkdir -p "$bin" "$share" "$units"
 # install replaces the files instead of writing into a running executable.
-install -m 755 "$source/iroh-link-gateway" "$source/iroh-link-gateway-background" "$bin/"
+install -m 755 "$source/iroh-link-gateway" "$bin/"
 rm -rf "$share/extensions"
 cp -R "$source/extensions" "$share/extensions"
 install -m 644 "$unit" "$units/$service"
