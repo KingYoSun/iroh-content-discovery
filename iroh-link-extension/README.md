@@ -92,6 +92,23 @@ Artifacts are written to `iroh-link-extension/dist/`:
   no Firefox-specific manifest fields.
 - `iroh-link-<version>-firefox.zip` for Firefox, with background scripts and
   the existing Gecko extension ID.
+- `iroh-link-<version>-firefox-unsigned.xpi`, the same Firefox package with
+  the XPI extension, explicitly marked unsigned.
+- A `.sha256` checksum file for each archive.
+
+The extension release workflow publishes these packages and checksums on
+`extension-v*` tags, independently of the gateway's `gateway-v*` releases.
+The tag must match `manifest.json`: version `0.2.1` uses `extension-v0.2.1`.
+After bumping the extension version and merging the changes, publish with:
+
+```sh
+git tag extension-v0.2.1
+git push origin extension-v0.2.1
+```
+
+Use the version being released in place of `0.2.1`. Pull requests and manual
+workflow runs build a `browser-extensions` artifact without publishing a release.
+Extension releases do not replace the gateway release at `/releases/latest`.
 
 The version comes from `manifest.json`. Each ZIP contains the manifest at its
 root, runtime files, and both license texts; tests, documentation, and packaging
@@ -100,7 +117,10 @@ browsers. Build commands work from any directory when invoked by absolute path.
 
 These packages are unsigned. Unzip the Chrome archive to load it unpacked, or
 upload it to the Chrome Web Store. Submit the Firefox ZIP to Mozilla for signing
-before permanent installation; signing produces an XPI. Packaging does not
+before permanent installation; renaming a ZIP to XPI does not sign it.
+For temporary loading in regular Firefox, open
+`about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on**, and
+select the Firefox ZIP. It is removed when Firefox restarts. Packaging does not
 upload, sign, or publish anything. The gateway is distributed separately.
 
 ## Settings and behavior

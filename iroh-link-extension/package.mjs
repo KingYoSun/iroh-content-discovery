@@ -1,4 +1,5 @@
-// Build unsigned, browser-specific ZIPs using Node.js and the zip utility.
+// Build unsigned browser packages and checksums using Node.js and zip.
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -40,7 +41,17 @@ for (const browser of platform === "all" ? ["chrome", "firefox"] : [platform]) {
     await rm(temporaryArchive, { force: true });
     execFileSync("zip", ["-X", "-q", temporaryArchive, ...files], { cwd: staging });
     await rename(temporaryArchive, archive);
-    console.log(archive);
+    const artifacts = [archive];
+    if (browser === "firefox") {
+      const xpi = join(output, `iroh-link-${source.version}-firefox-unsigned.xpi`);
+      await copyFile(archive, xpi);
+      artifacts.push(xpi);
+    }
+    for (const artifact of artifacts) {
+      const digest = createHash("sha256").update(await readFile(artifact)).digest("hex");
+      await writeFile(`${artifact}.sha256`, `${digest}  ${artifact.slice(output.length + 1)}\n`);
+      console.log(artifact);
+    }
   } finally {
     await rm(staging, { recursive: true, force: true });
     await rm(temporaryArchive, { force: true });
