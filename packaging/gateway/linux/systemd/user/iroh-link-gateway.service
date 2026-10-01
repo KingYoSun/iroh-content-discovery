@@ -1,0 +1,14 @@
+[Unit]
+Description=Iroh Link Gateway
+Documentation=https://github.com/n0-computer/iroh-content-discovery
+
+[Service]
+# Extra gateway arguments, for example "--listen 127.0.0.1:8081". Set them in a
+# drop-in created with `systemctl --user edit iroh-link-gateway`.
+Environment=IROH_GATEWAY_ARGS=
+ExecStart=%h/.local/bin/iroh-link-gateway --state-dir %h/.local/share/iroh-link-gateway $IROH_GATEWAY_ARGS
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

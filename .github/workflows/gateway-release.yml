@@ -23,6 +23,10 @@ jobs:
             target: x86_64-pc-windows-msvc
           - os: macos-15
             target: aarch64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -46,6 +50,14 @@ jobs:
           node-version: '22'
       - run: node --test iroh-link-extension/rules.test.js
       - run: python -m unittest discover -s packaging/gateway -p 'test_*.py'
+      - name: Install musl toolchain
+        if: runner.os == 'Linux'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+          echo "CC_${TARGET//-/_}=musl-gcc" >> "$GITHUB_ENV"
       - run: cargo test -p iroh-link-gateway --locked --bins --test background
       - run: cargo build --release --locked -p iroh-link-gateway --bins --target ${{ matrix.target }}
       - run: python packaging/gateway/stage.py ${{ matrix.target }}
@@ -60,10 +72,16 @@ jobs:
         run: |
           python packaging/gateway/macos/build.py
           python packaging/gateway/macos/smoke.py
+      - name: Build and test Linux archive
+        if: runner.os == 'Linux'
+        run: |
+          python packaging/gateway/linux/build.py ${{ matrix.target }}
+          python packaging/gateway/linux/smoke.py
       - uses: actions/upload-artifact@v4
         with:
           name: gateway-${{ matrix.target }}
           path: |
+            dist/*.tar.gz
             dist/*-setup.exe
             dist/*.pkg
             dist/*.sha256

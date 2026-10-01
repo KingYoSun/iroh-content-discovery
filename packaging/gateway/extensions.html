@@ -28,7 +28,9 @@ blake3.net and pkarr.net. Regular Firefox requires a Mozilla-signed package for
 permanent installation. See <a href="https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/">Mozilla's signing documentation</a>.</p>
 <h2>Where are these files?</h2>
 <p>Windows: <code>%LOCALAPPDATA%\Programs\Iroh Link Gateway\extensions</code>.<br>
-macOS: <code>~/Applications/Iroh Link Gateway Extensions</code>.</p>
+macOS: <code>~/Applications/Iroh Link Gateway Extensions</code>.<br>
+Linux: <code>/usr/local/share/iroh-link-gateway/extensions</code>, or
+<code>~/.local/share/iroh-link-gateway/extensions</code> for a user installation.</p>
 <p>Keep the Chrome folder in place while the unpacked extension is installed.
 After upgrading the gateway, reload the extension on the browser's extensions
 page. Remove the extension manually when uninstalling the gateway.</p>
@@ -42,4 +44,6 @@ on Windows or <code>~/Library/Application Support/iroh-link-gateway</code> on ma
 records startup errors. To change the port, stop the gateway and put
 <code>["--listen", "127.0.0.1:8081"]</code> in <code>arguments.json</code>.
 Restart it and set the same port in the extension. On macOS, run the app's
-<code>iroh-link-gateway-background install-agent</code> helper to update login arguments.</p>
+<code>iroh-link-gateway-background install-agent</code> helper to update login arguments.
+On Linux, the systemd service logs to the journal and takes its arguments from
+<code>IROH_GATEWAY_ARGS</code>; see the README.</p>
