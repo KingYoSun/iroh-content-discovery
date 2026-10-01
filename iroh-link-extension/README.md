@@ -92,6 +92,14 @@ Artifacts are written to `iroh-link-extension/dist/`:
   no Firefox-specific manifest fields.
 - `iroh-link-<version>-firefox.zip` for Firefox, with background scripts and
   the existing Gecko extension ID.
+- `iroh-link-<version>-firefox-unsigned.xpi`, the same Firefox package with
+  the XPI extension, explicitly marked unsigned.
+- A `.sha256` checksum file for each archive.
+
+The gateway release workflow attaches these packages and checksums to each
+`gateway-v*` GitHub release, alongside the native installers. They are also
+available as the `gateway-extensions` workflow artifact on pull requests and
+manual workflow runs.
 
 The version comes from `manifest.json`. Each ZIP contains the manifest at its
 root, runtime files, and both license texts; tests, documentation, and packaging
@@ -100,7 +108,10 @@ browsers. Build commands work from any directory when invoked by absolute path.
 
 These packages are unsigned. Unzip the Chrome archive to load it unpacked, or
 upload it to the Chrome Web Store. Submit the Firefox ZIP to Mozilla for signing
-before permanent installation; signing produces an XPI. Packaging does not
+before permanent installation; renaming a ZIP to XPI does not sign it.
+For temporary loading in regular Firefox, open
+`about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on**, and
+select the Firefox ZIP. It is removed when Firefox restarts. Packaging does not
 upload, sign, or publish anything. The gateway is distributed separately.
 
 ## Settings and behavior
