@@ -357,13 +357,18 @@ runs straight from the unpacked archive as `./iroh-link-gateway`.
 The same files also come as Debian/Ubuntu (`.deb`), Fedora (`.rpm`), and Arch
 Linux (`.pkg.tar.zst`) packages for x64 and arm64. They install the gateway in
 `/usr/bin`, the extension files in `/usr/share/iroh-link-gateway/extensions`,
-and both systemd units, but enable nothing. Choose one service after installing:
+and both systemd units. As with other Debian services, installing the `.deb`
+enables and starts the system service. Following Fedora and Arch Linux practice,
+the `.rpm` and Arch packages enable nothing, so choose a service after
+installing:
 
 ```sh
 sudo systemctl enable --now iroh-link-gateway   # system service, starts at boot
 systemctl --user enable --now iroh-link-gateway # user service, runs while you are logged in
 ```
 
+To use the user service on Debian or Ubuntu instead, first run
+`sudo systemctl disable --now iroh-link-gateway`; upgrades leave it disabled.
 Upgrading the package restarts a running system service; restart a user service
 yourself with `systemctl --user restart iroh-link-gateway`. Removing the package
 stops and disables the system service and keeps its state, unless you purge the

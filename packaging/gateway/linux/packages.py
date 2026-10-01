@@ -78,6 +78,7 @@ def config(target, work):
         },
         # pacman runs post_upgrade instead of post_install on upgrades.
         'archlinux': {'packager': MAINTAINER, 'scripts': {'postupgrade': str(scripts / 'postinstall.sh')}},
+        'overrides': {'deb': {'scripts': {'postinstall': str(scripts / 'postinstall-deb.sh')}}},
     }
 
 def build(target):

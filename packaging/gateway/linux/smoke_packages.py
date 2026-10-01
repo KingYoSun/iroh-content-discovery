@@ -50,16 +50,18 @@ def systemd():
 
     try:
         apt('install', str(deb))
-        # Installing enables nothing.
-        assert subprocess.run(['systemctl', 'is-enabled', '--quiet', service]).returncode != 0
-        assert not listening(45475)
-        subprocess.run(['sudo', 'systemctl', 'start', service], check=True)
-        wait(lambda: listening(45475), 'system service is not listening')
+        # Installing enables and starts the system service.
+        subprocess.run(['systemctl', 'is-enabled', '--quiet', service], check=True)
+        wait(lambda: listening(45475), 'system service is not listening after install')
         apt('install', '--reinstall', str(deb))
         subprocess.run(['systemctl', 'is-active', '--quiet', service], check=True)
         wait(lambda: listening(45475), 'system service is not listening after reinstall')
-        subprocess.run(['sudo', 'systemctl', 'stop', service], check=True)
+        # An upgrade leaves a disabled service off.
+        subprocess.run(['sudo', 'systemctl', 'disable', '--now', service], check=True)
         wait(lambda: not listening(45475), 'system service still listens after stop')
+        apt('install', '--reinstall', str(deb))
+        assert subprocess.run(['systemctl', 'is-enabled', '--quiet', service]).returncode != 0
+        assert not listening(45475)
         user_manager()
         subprocess.run(['systemctl', '--user', 'start', service], check=True)
         wait(lambda: listening(45475), 'user service is not listening')
