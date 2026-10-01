@@ -96,10 +96,19 @@ Artifacts are written to `iroh-link-extension/dist/`:
   the XPI extension, explicitly marked unsigned.
 - A `.sha256` checksum file for each archive.
 
-The gateway release workflow attaches these packages and checksums to each
-`gateway-v*` GitHub release, alongside the native installers. They are also
-available as the `gateway-extensions` workflow artifact on pull requests and
-manual workflow runs.
+The extension release workflow publishes these packages and checksums on
+`extension-v*` tags, independently of the gateway's `gateway-v*` releases.
+The tag must match `manifest.json`: version `0.2.1` uses `extension-v0.2.1`.
+After bumping the extension version and merging the changes, publish with:
+
+```sh
+git tag extension-v0.2.1
+git push origin extension-v0.2.1
+```
+
+Use the version being released in place of `0.2.1`. Pull requests and manual
+workflow runs build a `browser-extensions` artifact without publishing a release.
+Extension releases do not replace the gateway release at `/releases/latest`.
 
 The version comes from `manifest.json`. Each ZIP contains the manifest at its
 root, runtime files, and both license texts; tests, documentation, and packaging

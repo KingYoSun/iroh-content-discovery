@@ -14,24 +14,6 @@ on:
 permissions:
   contents: read
 jobs:
-  extensions:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - run: npm --prefix iroh-link-extension test
-      - run: npm --prefix iroh-link-extension run package
-      - uses: actions/upload-artifact@v4
-        with:
-          name: gateway-extensions
-          path: |
-            iroh-link-extension/dist/*.zip
-            iroh-link-extension/dist/*.xpi
-            iroh-link-extension/dist/*.sha256
-          if-no-files-found: error
   build:
     strategy:
       fail-fast: false
@@ -93,7 +75,7 @@ jobs:
           path: installer-test-logs/
   publish:
     if: startsWith(github.ref, 'refs/tags/gateway-v')
-    needs: [build, extensions]
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -103,7 +85,7 @@ jobs:
           pattern: gateway-*
           merge-multiple: true
           path: dist
-      - name: Publish installers and extensions
+      - name: Publish installers
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

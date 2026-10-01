@@ -1,0 +1,64 @@
+name: Browser extension releases
+on:
+  push:
+    tags: ['extension-v*']
+  pull_request:
+    paths:
+      - 'iroh-link-extension/**'
+      - '.github/workflows/extension-release.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check release tag matches extension version
+        if: startsWith(github.ref, 'refs/tags/extension-v')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('iroh-link-extension/manifest.json', 'utf8'));
+          if (process.env.RELEASE_TAG !== `extension-v${version}`) {
+            throw new Error('Tag must match extension manifest version');
+          }
+          JS
+      - run: npm --prefix iroh-link-extension test
+      - run: npm --prefix iroh-link-extension run package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-extensions
+          path: |
+            iroh-link-extension/dist/*.zip
+            iroh-link-extension/dist/*.xpi
+            iroh-link-extension/dist/*.sha256
+          if-no-files-found: error
+  publish:
+    if: startsWith(github.ref, 'refs/tags/extension-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: browser-extensions
+          path: dist
+      - name: Publish extension packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* --verify-tag --generate-notes --title "$RELEASE_TAG" --latest=false
+          fi
