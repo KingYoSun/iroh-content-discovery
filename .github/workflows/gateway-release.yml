@@ -58,6 +58,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes musl-tools
           echo "CC_${TARGET//-/_}=musl-gcc" >> "$GITHUB_ENV"
+      - name: Install nfpm
+        if: runner.os == 'Linux'
+        env:
+          NFPM_VERSION: '2.47.0'
+          NFPM_ARCH: ${{ runner.arch == 'ARM64' && 'arm64' || 'x86_64' }}
+        run: |
+          archive="nfpm_${NFPM_VERSION}_Linux_${NFPM_ARCH}.tar.gz"
+          base="https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}"
+          curl --fail --silent --show-error --location --remote-name "$base/$archive" --remote-name "$base/checksums.txt"
+          grep " $archive\$" checksums.txt | sha256sum --check
+          sudo tar -xzf "$archive" -C /usr/local/bin nfpm
+          rm "$archive" checksums.txt
       - run: cargo test -p iroh-link-gateway --locked --bins --test background
       - run: cargo build --release --locked -p iroh-link-gateway --bins --target ${{ matrix.target }}
       - run: python packaging/gateway/stage.py ${{ matrix.target }}
@@ -72,16 +84,21 @@ jobs:
         run: |
           python packaging/gateway/macos/build.py
           python packaging/gateway/macos/smoke.py
-      - name: Build and test Linux archive
+      - name: Build and test Linux archive and packages
         if: runner.os == 'Linux'
         run: |
           python packaging/gateway/linux/build.py ${{ matrix.target }}
           python packaging/gateway/linux/smoke.py
+          python packaging/gateway/linux/packages.py ${{ matrix.target }}
+          python packaging/gateway/linux/smoke_packages.py
       - uses: actions/upload-artifact@v4
         with:
           name: gateway-${{ matrix.target }}
           path: |
             dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.zst
             dist/*-setup.exe
             dist/*.pkg
             dist/*.sha256
