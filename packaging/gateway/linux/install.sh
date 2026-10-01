@@ -73,7 +73,11 @@ mkdir -p "$bin" "$share" "$units"
 install -m 755 "$source/iroh-link-gateway" "$bin/"
 rm -rf "$share/extensions"
 cp -R "$source/extensions" "$share/extensions"
-install -m 644 "$unit" "$units/$service"
+if $user; then
+    sed 's|^ExecStart=iroh-link-gateway |ExecStart=%h/.local/bin/iroh-link-gateway |' "$unit" > "$units/$service"
+else
+    install -m 644 "$unit" "$units/$service"
+fi
 echo "Installed the gateway in $bin and the browser extension files in $share/extensions."
 if $systemd; then
     $systemctl daemon-reload

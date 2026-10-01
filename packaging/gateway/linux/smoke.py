@@ -9,7 +9,6 @@ import tempfile
 import time
 
 root = Path(__file__).resolve().parents[3]
-archive = next((root / 'dist').glob('*-linux-*.tar.gz'))
 logs = root / 'installer-test-logs'
 logs.mkdir(exist_ok=True)
 
@@ -26,6 +25,13 @@ def wait(condition, message):
             return
         time.sleep(0.1)
     raise AssertionError(message)
+
+def user_manager():
+    """Start the CI runner's systemd user manager, which needs a login session or lingering."""
+    runtime = Path(f'/run/user/{os.getuid()}')
+    os.environ['XDG_RUNTIME_DIR'] = str(runtime)
+    subprocess.run(['sudo', 'loginctl', 'enable-linger', str(os.getuid())], check=True)
+    wait(lambda: (runtime / 'bus').exists(), 'systemd user manager did not start')
 
 def portable(app, work):
     state = work / 'state'
@@ -72,6 +78,8 @@ def installed(app, label, prefix, systemctl, bin, share, unit):
             wait(lambda: listening(45475), f'{label} service is not listening after {step}')
             subprocess.run([*systemctl, 'is-active', '--quiet', service], check=True)
             subprocess.run([*systemctl, 'is-enabled', '--quiet', service], check=True)
+        if label == 'user':
+            assert 'ExecStart=%h/.local/bin/iroh-link-gateway ' in unit.read_text()
         for path in [bin / 'iroh-link-gateway', unit,
                      share / 'extensions/chrome/manifest.json', share / 'extensions/Install extensions.html']:
             assert path.is_file(), path
@@ -86,26 +94,24 @@ def installed(app, label, prefix, systemctl, bin, share, unit):
         result = subprocess.run([*prefix, *journal], capture_output=True, text=True)
         (logs / f'{label}-journal.log').write_text(result.stdout + result.stderr)
 
-with tempfile.TemporaryDirectory(prefix='iroh-link-gateway-smoke-') as temporary:
-    work = Path(temporary)
-    with tarfile.open(archive) as tar:
-        tar.extractall(work, filter='data')
-    app = work / archive.name.removesuffix('.tar.gz')
-    portable(app, work)
-    passed = 'static binary, local extensions, start, stop'
-    # Installing changes the machine, so it runs only on an ephemeral CI runner.
-    if os.environ.get('CI') == 'true':
-        home = Path.home()
-        installed(app, 'system', ['sudo'], ['systemctl'], Path('/usr/local/bin'),
-                  Path('/usr/local/share/iroh-link-gateway'),
-                  Path('/etc/systemd/system/iroh-link-gateway.service'))
-        # The runner has no login session; lingering starts its systemd user manager.
-        runtime = Path(f'/run/user/{os.getuid()}')
-        os.environ['XDG_RUNTIME_DIR'] = str(runtime)
-        subprocess.run(['sudo', 'loginctl', 'enable-linger', str(os.getuid())], check=True)
-        wait(lambda: (runtime / 'bus').exists(), 'systemd user manager did not start')
-        installed(app, 'user', [], ['systemctl', '--user'], home / '.local/bin',
-                  home / '.local/share/iroh-link-gateway',
-                  home / '.config/systemd/user/iroh-link-gateway.service')
-        passed += ', system and user install, upgrade, uninstall'
-    print('PASS: ' + passed)
+if __name__ == '__main__':
+    archive = next((root / 'dist').glob('*-linux-*.tar.gz'))
+    with tempfile.TemporaryDirectory(prefix='iroh-link-gateway-smoke-') as temporary:
+        work = Path(temporary)
+        with tarfile.open(archive) as tar:
+            tar.extractall(work, filter='data')
+        app = work / archive.name.removesuffix('.tar.gz')
+        portable(app, work)
+        passed = 'static binary, local extensions, start, stop'
+        # Installing changes the machine, so it runs only on an ephemeral CI runner.
+        if os.environ.get('CI') == 'true':
+            home = Path.home()
+            installed(app, 'system', ['sudo'], ['systemctl'], Path('/usr/local/bin'),
+                      Path('/usr/local/share/iroh-link-gateway'),
+                      Path('/etc/systemd/system/iroh-link-gateway.service'))
+            user_manager()
+            installed(app, 'user', [], ['systemctl', '--user'], home / '.local/bin',
+                      home / '.local/share/iroh-link-gateway',
+                      home / '.config/systemd/user/iroh-link-gateway.service')
+            passed += ', system and user install, upgrade, uninstall'
+        print('PASS: ' + passed)

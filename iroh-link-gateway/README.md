@@ -354,6 +354,28 @@ Running `install.sh` again upgrades the installation and restarts the service.
 Without systemd the files are installed and nothing is started. The gateway also
 runs straight from the unpacked archive as `./iroh-link-gateway`.
 
+The same files also come as Debian/Ubuntu (`.deb`), Fedora (`.rpm`), and Arch
+Linux (`.pkg.tar.zst`) packages for x64 and arm64. They install the gateway in
+`/usr/bin`, the extension files in `/usr/share/iroh-link-gateway/extensions`,
+and both systemd units. As with other Debian services, installing the `.deb`
+enables and starts the system service. Following Fedora and Arch Linux practice,
+the `.rpm` and Arch packages enable nothing, so choose a service after
+installing:
+
+```sh
+sudo systemctl enable --now iroh-link-gateway   # system service, starts at boot
+systemctl --user enable --now iroh-link-gateway # user service, runs while you are logged in
+```
+
+To use the user service on Debian or Ubuntu instead, first run
+`sudo systemctl disable --now iroh-link-gateway`; upgrades leave it disabled.
+Upgrading the package restarts a running system service; restart a user service
+yourself with `systemctl --user restart iroh-link-gateway`. Removing the package
+stops and disables the system service and keeps its state, unless you purge the
+Debian package. The package cannot reach user services, so run
+`systemctl --user disable --now iroh-link-gateway` as each user who enabled one
+before removing it.
+
 Extensions are local files for manual installation; browser profiles are not
 modified. Open `extensions/Install extensions.html` on Windows or
 `~/Applications/Iroh Link Gateway Extensions/Install extensions.html` on macOS.
@@ -407,15 +429,19 @@ python packaging/gateway/stage.py <target>
 ./packaging/gateway/windows/build.ps1
 # On macOS:
 python packaging/gateway/macos/build.py
-# On Linux:
+# On Linux, with nfpm (https://nfpm.goreleaser.com) for the packages:
 python packaging/gateway/linux/build.py <target>
+python packaging/gateway/linux/packages.py <target>
 ```
 
-Installers, Linux archives, and SHA-256 files are written to `dist/`. The macOS
-app is ad-hoc signed; the installer is not Developer ID signed or notarized. Windows installers are
-unsigned. Native install/upgrade/uninstall smoke tests run on ephemeral CI runners;
+Installers, Linux archives and packages, and SHA-256 files are written to
+`dist/`. The macOS app is ad-hoc signed; the installer is not Developer ID signed
+or notarized. Windows installers are unsigned. Native install/upgrade/uninstall smoke tests run on ephemeral CI runners;
 the Linux smoke test also starts and stops the gateway from the unpacked archive
-in a temporary directory, which is the only part that runs outside CI.
+in a temporary directory, and the package smoke test installs, upgrades, and
+removes each package in a Debian, Fedora, and Arch Linux container. Those parts
+also run outside CI.
 The `Gateway installers` workflow builds PR artifacts and supports manual runs;
-only `gateway-v*` tags publish GitHub release assets. No Linux distribution
-package or Intel macOS binary is built.
+only `gateway-v*` tags publish GitHub release assets. The Linux packages are
+release assets only; there is no APT, DNF, or pacman repository. No Intel macOS
+binary is built.
