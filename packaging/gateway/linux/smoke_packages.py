@@ -44,7 +44,8 @@ def systemd():
 
     def apt(*arguments):
         result = subprocess.run(['sudo', 'apt-get', *arguments, '-y'], capture_output=True, text=True, timeout=300)
-        (logs / 'package-apt.log').open('a').write(result.stdout + result.stderr)
+        with (logs / 'package-apt.log').open('a') as log:
+            log.write(result.stdout + result.stderr)
         assert result.returncode == 0, result.stdout + result.stderr
 
     try:

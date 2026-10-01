@@ -13,14 +13,41 @@ from stage import ROOT, checksum, version
 HERE = pathlib.Path(__file__).resolve().parent
 ARCHITECTURES = {'x86_64-unknown-linux-musl': 'amd64', 'aarch64-unknown-linux-musl': 'arm64'}
 PACKAGERS = ['deb', 'rpm', 'archlinux']
+MAINTAINER = 'n0 team <hello@n0.computer>'
 
-def config(target):
+def copyright():
+    """Debian's machine-readable copyright file, with the MIT text from LICENSE-MIT."""
+    holder, _, mit = (ROOT / 'LICENSE-MIT').read_text().partition('\n')
+    # Debian marks blank lines in field text with a lone period.
+    text = '\n'.join(f' {line}' if line.strip() else ' .' for line in mit.strip().splitlines())
+    return f"""Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: iroh-link-gateway
+Upstream-Contact: {MAINTAINER}
+Source: https://github.com/n0-computer/iroh-content-discovery
+Comment: The gateway is statically linked with Rust crates under their own
+ licenses, mostly MIT or Apache-2.0, and also BSD, ISC, MPL-2.0, Unicode-3.0,
+ and Zlib. Cargo.lock in the source repository lists them.
+
+Files: *
+Copyright: {holder.removeprefix('Copyright ')}
+License: Expat or Apache-2.0
+
+License: Expat
+{text}
+
+License: Apache-2.0
+ On Debian systems, the full text of the Apache License, Version 2.0 can be
+ found in /usr/share/common-licenses/Apache-2.0.
+"""
+
+def config(target, work):
     staged = ROOT / 'dist/gateway' / target
     scripts = HERE / 'package-scripts'
     workspace = tomllib.loads((ROOT / 'Cargo.toml').read_text())['workspace']['package']
     contents = [
         {'src': str(staged / 'iroh-link-gateway'), 'dst': '/usr/bin/iroh-link-gateway', 'file_info': {'mode': 0o755}},
         {'src': str(staged / 'README.md'), 'dst': '/usr/share/doc/iroh-link-gateway/README.md'},
+        {'src': str(work / 'copyright'), 'dst': '/usr/share/doc/iroh-link-gateway/copyright', 'packager': 'deb'},
     ]
     # nfpm's tree entries give Arch packages invalid directory modes, so list each file.
     for path in sorted((staged / 'extensions').rglob('*')):
@@ -39,7 +66,7 @@ def config(target):
         'arch': ARCHITECTURES[target],
         'platform': 'linux',
         'section': 'net',
-        'maintainer': workspace['authors'][0],
+        'maintainer': MAINTAINER,
         'description': 'Local HTTP gateway for blake3.net and pkarr.net links, served from iroh peers',
         'homepage': 'https://github.com/n0-computer/iroh-content-discovery',
         'license': workspace['license'],
@@ -50,15 +77,17 @@ def config(target):
             'postremove': str(scripts / 'postremove.sh'),
         },
         # pacman runs post_upgrade instead of post_install on upgrades.
-        'archlinux': {'packager': workspace['authors'][0], 'scripts': {'postupgrade': str(scripts / 'postinstall.sh')}},
+        'archlinux': {'packager': MAINTAINER, 'scripts': {'postupgrade': str(scripts / 'postinstall.sh')}},
     }
 
 def build(target):
     dist = ROOT / 'dist'
     with tempfile.TemporaryDirectory(prefix='iroh-link-gateway-nfpm-') as temporary:
         # nfpm reads YAML, and JSON is YAML.
-        path = pathlib.Path(temporary) / 'nfpm.yaml'
-        path.write_text(json.dumps(config(target), indent=2))
+        work = pathlib.Path(temporary)
+        (work / 'copyright').write_text(copyright())
+        path = work / 'nfpm.yaml'
+        path.write_text(json.dumps(config(target, work), indent=2))
         packages = []
         for packager in PACKAGERS:
             output = pathlib.Path(temporary) / packager

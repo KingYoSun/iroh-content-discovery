@@ -366,7 +366,10 @@ systemctl --user enable --now iroh-link-gateway # user service, runs while you a
 
 Upgrading the package restarts a running system service; restart a user service
 yourself with `systemctl --user restart iroh-link-gateway`. Removing the package
-stops and disables the system service.
+stops and disables the system service and keeps its state, unless you purge the
+Debian package. The package cannot reach user services, so run
+`systemctl --user disable --now iroh-link-gateway` as each user who enabled one
+before removing it.
 
 Extensions are local files for manual installation; browser profiles are not
 modified. Open `extensions/Install extensions.html` on Windows or
@@ -426,9 +429,9 @@ python packaging/gateway/linux/build.py <target>
 python packaging/gateway/linux/packages.py <target>
 ```
 
-Installers, Linux archives and packages, and SHA-256 files are written to `dist/`. The macOS
-app is ad-hoc signed; the installer is not Developer ID signed or notarized. Windows installers are
-unsigned. Native install/upgrade/uninstall smoke tests run on ephemeral CI runners;
+Installers, Linux archives and packages, and SHA-256 files are written to
+`dist/`. The macOS app is ad-hoc signed; the installer is not Developer ID signed
+or notarized. Windows installers are unsigned. Native install/upgrade/uninstall smoke tests run on ephemeral CI runners;
 the Linux smoke test also starts and stops the gateway from the unpacked archive
 in a temporary directory, and the package smoke test installs, upgrades, and
 removes each package in a Debian, Fedora, and Arch Linux container. Those parts
