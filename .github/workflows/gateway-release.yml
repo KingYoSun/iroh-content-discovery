@@ -132,5 +132,13 @@ jobs:
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" dist/* --clobber
           else
-            gh release create "$RELEASE_TAG" dist/* --verify-tag --notes-file notes.md --generate-notes --title "$RELEASE_TAG"
+            # Compare with the previous gateway release, not the newest tag,
+            # which may be an extension release.
+            previous=$(gh release list --limit 100 --json tagName \
+              --jq '[.[].tagName | select(startswith("gateway-v") and . != $ENV.RELEASE_TAG)][0] // empty')
+            start=()
+            if [ -n "$previous" ]; then
+              start=(--notes-start-tag "$previous")
+            fi
+            gh release create "$RELEASE_TAG" dist/* --verify-tag --notes-file notes.md --generate-notes "${start[@]}" --title "$RELEASE_TAG"
           fi
