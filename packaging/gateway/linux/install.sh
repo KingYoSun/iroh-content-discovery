@@ -61,6 +61,7 @@ if $uninstall; then
     fi
     rm -f "$units/$service" "$bin/iroh-link-gateway"
     rm -rf "$share/extensions"
+    rmdir "$share" 2>/dev/null || true
     if $systemd; then
         $systemctl daemon-reload
     fi
@@ -68,17 +69,18 @@ if $uninstall; then
     exit 0
 fi
 
-mkdir -p "$bin" "$share" "$units"
+mkdir -p "$bin" "$units"
 # install replaces the files instead of writing into a running executable.
 install -m 755 "$source/iroh-link-gateway" "$bin/"
+# Older versions installed unpacked extension files here.
 rm -rf "$share/extensions"
-cp -R "$source/extensions" "$share/extensions"
+rmdir "$share" 2>/dev/null || true
 if $user; then
     sed 's|^ExecStart=iroh-link-gateway |ExecStart=%h/.local/bin/iroh-link-gateway |' "$unit" > "$units/$service"
 else
     install -m 644 "$unit" "$units/$service"
 fi
-echo "Installed the gateway in $bin and the browser extension files in $share/extensions."
+echo "Installed the gateway in $bin."
 if $systemd; then
     $systemctl daemon-reload
     $systemctl enable "$service"

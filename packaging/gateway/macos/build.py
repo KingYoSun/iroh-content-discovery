@@ -40,7 +40,6 @@ with tempfile.TemporaryDirectory(prefix="iroh-link-gateway-pkg-") as temporary:
         shutil.copy2(staged / name, resources / name)
     shutil.copy2(root / "packaging/gateway/macos/AppIcon.icns", resources / "AppIcon.icns")
     subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(contents.parent)], check=True)
-    shutil.copytree(staged / "extensions", applications / "Iroh Link Gateway Extensions")
     for action in ["Start", "Stop"]:
         script = applications / f"{action} Iroh Link Gateway.command"
         command = "install-agent" if action == "Start" else "remove-agent"

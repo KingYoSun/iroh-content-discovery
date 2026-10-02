@@ -25,7 +25,7 @@ function Status {
 try {
     Install 'install'
     Status
-    foreach ($name in @('iroh-link-gateway.exe','iroh-link-gateway-background.exe','extensions/chrome/manifest.json','extensions/firefox/manifest.json','extensions/iroh-link-firefox-unsigned.xpi','extensions/Install extensions.html')) {
+    foreach ($name in @('iroh-link-gateway.exe','iroh-link-gateway-background.exe')) {
         if (!(Test-Path "$app/$name")) { throw "Missing $name" }
     }
     $startup = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run').'Iroh Link Gateway'
@@ -39,7 +39,7 @@ try {
     if ((Test-Path "$app/iroh-link-gateway.exe") -or (Test-Path "$state/ready")) { throw 'Uninstall left gateway running or installed' }
     if (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Iroh Link Gateway' -ErrorAction SilentlyContinue) { throw 'Login entry remains' }
     if ((Get-Content "$state/arguments.json" -Raw).Trim() -ne $settings) { throw 'Uninstall removed settings' }
-    Write-Host 'PASS: install, login registration, local extension files, upgrade, stop, uninstall, settings retention'
+    Write-Host 'PASS: install, login registration, upgrade, stop, uninstall, settings retention'
 } finally {
     foreach ($name in @('gateway.log','launcher.log')) {
         if (Test-Path "$state/$name") { Copy-Item "$state/$name" $logs }

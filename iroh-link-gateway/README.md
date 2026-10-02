@@ -330,9 +330,9 @@ using port 45475 before installation.
 An occupied port fails startup without stopping the other application.
 
 - Windows installs in `%LOCALAPPDATA%\Programs\Iroh Link Gateway` with Start, Stop,
-  extension instructions, and Uninstall entries in the Start menu.
-- macOS installs `Iroh Link Gateway.app`, Start/Stop commands, an uninstaller, and
-  `Iroh Link Gateway Extensions` under `~/Applications`. A per-user LaunchAgent runs
+  browser extension, and Uninstall entries in the Start menu.
+- macOS installs `Iroh Link Gateway.app`, Start/Stop commands, and an uninstaller
+  under `~/Applications`. A per-user LaunchAgent runs
   the gateway; Start registers it and Stop unregisters it. The app also starts
   the gateway when opened. Install for your account without `sudo`.
 
@@ -340,12 +340,10 @@ Linux x64 and arm64 get a `.tar.gz` with a statically linked `iroh-link-gateway`
 an `install.sh` script, and systemd units. systemd starts, stops, and restarts
 the gateway, so the Linux archive has no `iroh-link-gateway-background` launcher.
 
-- `sudo ./install.sh` installs the gateway in `/usr/local/bin` and the extension
-  files in `/usr/local/share/iroh-link-gateway/extensions`, then enables and
+- `sudo ./install.sh` installs the gateway in `/usr/local/bin`, then enables and
   starts the system service `iroh-link-gateway.service`. The service runs as a
   dynamic unprivileged user and starts at boot.
-- `./install.sh --user` installs the gateway in `~/.local/bin` and the extension
-  files in `~/.local/share/iroh-link-gateway/extensions`, then enables and
+- `./install.sh --user` installs the gateway in `~/.local/bin`, then enables and
   starts a systemd user service of the same name, which runs while you are
   logged in. Run it without `sudo`.
 - Add `--uninstall` to either command to stop the service and remove those files.
@@ -356,8 +354,7 @@ runs straight from the unpacked archive as `./iroh-link-gateway`.
 
 The same files also come as Debian/Ubuntu (`.deb`), Fedora (`.rpm`), and Arch
 Linux (`.pkg.tar.zst`) packages for x64 and arm64. They install the gateway in
-`/usr/bin`, the extension files in `/usr/share/iroh-link-gateway/extensions`,
-and both systemd units. As with other Debian services, installing the `.deb`
+`/usr/bin` and both systemd units. As with other Debian services, installing the `.deb`
 enables and starts the system service. Following Fedora and Arch Linux practice,
 the `.rpm` and Arch packages enable nothing, so choose a service after
 installing:
@@ -376,22 +373,18 @@ Debian package. The package cannot reach user services, so run
 `systemctl --user disable --now iroh-link-gateway` as each user who enabled one
 before removing it.
 
-Extensions are local files for manual installation; browser profiles are not
-modified. Open `extensions/Install extensions.html` on Windows or
-`~/Applications/Iroh Link Gateway Extensions/Install extensions.html` on macOS.
-Chrome/Brave uses Developer mode and Load unpacked. Firefox supports a temporary
-add-on; the included unsigned XPI can be installed permanently in Developer
-Edition, Nightly, or ESR with signature enforcement disabled. Release Firefox
-requires Mozilla signing for permanent installation. The instructions link to
-Mozilla's requirements. No extension signing or publishing happens during builds.
+The installers do not include the browser extension and do not modify browser
+profiles. Install it for Chrome or Brave from the [Chrome Web Store][chrome-store];
+the Windows installer offers to open that page when it finishes. For Firefox, see
+the [extension README](../iroh-link-extension/README.md#install-in-firefox).
+Upgrading removes the unpacked extension files that older installers included.
 
 Settings and logs live in `%LOCALAPPDATA%\iroh-link-gateway` on Windows and
 `~/Library/Application Support/iroh-link-gateway` on macOS. `gateway.log` contains
 runtime logs; on gateway startup, logs larger than 5 MiB replace
 `gateway.previous.log` and `gateway.log` starts empty. Logs are not rotated while
 the gateway is running. `launcher.log` contains startup failures. Uninstall
-preserves this directory. Remove browser extensions manually before uninstalling
-their files.
+preserves this directory.
 
 `arguments.json` is a JSON array of gateway CLI arguments, initially `[]`.
 For example, `["--listen", "127.0.0.1:8081"]` selects another port. Stop the gateway,
@@ -445,3 +438,5 @@ The `Gateway installers` workflow builds PR artifacts and supports manual runs;
 only `gateway-v*` tags publish GitHub release assets. The Linux packages are
 release assets only; there is no APT, DNF, or pacman repository. No Intel macOS
 binary is built.
+
+[chrome-store]: https://chromewebstore.google.com/detail/iroh-link/aajlbmaphckgbinhnifpiggcmdfnofcd

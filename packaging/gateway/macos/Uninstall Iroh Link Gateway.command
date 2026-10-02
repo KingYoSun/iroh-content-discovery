@@ -11,7 +11,7 @@ if [ "${1:-}" != '--yes' ]; then
 fi
 app="$HOME/Applications/Iroh Link Gateway.app"
 "$app/Contents/MacOS/iroh-link-gateway-background" remove-agent
-# Remove installed binaries, extension copies, and shortcuts; preserve settings and logs.
+# Remove installed binaries, shortcuts, and extension copies from older versions; preserve settings and logs.
 /bin/rm -rf "$app" "$HOME/Applications/Iroh Link Gateway Extensions"
 /bin/rm -f "$HOME/Applications/Start Iroh Link Gateway.command" "$HOME/Applications/Stop Iroh Link Gateway.command"
 /bin/rm -f "$HOME/Applications/Uninstall Iroh Link Gateway.command"

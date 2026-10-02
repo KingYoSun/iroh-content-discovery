@@ -49,11 +49,6 @@ def config(target, work):
         {'src': str(staged / 'README.md'), 'dst': '/usr/share/doc/iroh-link-gateway/README.md'},
         {'src': str(work / 'copyright'), 'dst': '/usr/share/doc/iroh-link-gateway/copyright', 'packager': 'deb'},
     ]
-    # nfpm's tree entries give Arch packages invalid directory modes, so list each file.
-    for path in sorted((staged / 'extensions').rglob('*')):
-        if path.is_file():
-            relative = path.relative_to(staged).as_posix()
-            contents.append({'src': str(path), 'dst': f'/usr/share/iroh-link-gateway/{relative}'})
     for kind in ['system', 'user']:
         contents.append({'src': str(HERE / 'systemd' / kind / 'iroh-link-gateway.service'),
                          'dst': f'/usr/lib/systemd/{kind}/iroh-link-gateway.service'})

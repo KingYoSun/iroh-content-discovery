@@ -93,6 +93,7 @@ the endpoint has no authentication.
 
 MIT or Apache-2.0, at your option.
 
+[chrome-store]: https://chromewebstore.google.com/detail/iroh-link/aajlbmaphckgbinhnifpiggcmdfnofcd
 [eid]: https://docs.rs/iroh/latest/iroh/struct.PublicKey.html
 
 ## Finding servers
@@ -324,8 +325,9 @@ The fifth project, [`iroh-link-extension`](iroh-link-extension/README.md),
 rewrites `https://<z32>.blake3.net/<path>` to
 `http://<z32>.blake3.localhost:<port>/<path>`, and
 `https://<key>.pkarr.net/<path>` to `http://<key>.pkarr.localhost:<port>/<path>`,
-in Chrome, Brave and Firefox. Load that directory
-unpacked from the browser's extensions page with Developer mode enabled. The
+in Chrome, Brave and Firefox. Install it for Chrome or Brave from the
+[Chrome Web Store][chrome-store], or load that directory unpacked from the
+browser's extensions page with Developer mode enabled. The
 popup configures the local gateway port (default 45475) and enables/disables
 rewrites. The apex `blake3.net` site is unaffected.
 

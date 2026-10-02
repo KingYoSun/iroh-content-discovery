@@ -11,8 +11,6 @@ deb = next(dist.glob('iroh-link-gateway_*.deb'))
 rpm = next(dist.glob('iroh-link-gateway-*.rpm'))
 arch = next(dist.glob('iroh-link-gateway-*.pkg.tar.zst'))
 FILES = ['/usr/lib/systemd/system/iroh-link-gateway.service', '/usr/lib/systemd/user/iroh-link-gateway.service',
-         '/usr/share/iroh-link-gateway/extensions/chrome/manifest.json',
-         '/usr/share/iroh-link-gateway/extensions/Install extensions.html',
          '/usr/share/licenses/iroh-link-gateway/LICENSE-MIT']
 CHECK = 'iroh-link-gateway --help >/dev/null && ' + ' && '.join(f"test -f '{path}'" for path in FILES)
 GONE = '! test -e /usr/bin/iroh-link-gateway'
