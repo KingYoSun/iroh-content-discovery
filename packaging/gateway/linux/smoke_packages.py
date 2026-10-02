@@ -7,9 +7,9 @@ import subprocess
 from smoke import listening, logs, root, user_manager, wait
 
 dist = root / 'dist'
-deb = next(dist.glob('iroh-link-gateway_*.deb'))
-rpm = next(dist.glob('iroh-link-gateway-*.rpm'))
-arch = next(dist.glob('iroh-link-gateway-*.pkg.tar.zst'))
+deb = next(dist.glob('iroh-link-gateway-*-linux-*.deb'))
+rpm = next(dist.glob('iroh-link-gateway-*-linux-*.rpm'))
+arch = next(dist.glob('iroh-link-gateway-*-linux-*.pkg.tar.zst'))
 FILES = ['/usr/lib/systemd/system/iroh-link-gateway.service', '/usr/lib/systemd/user/iroh-link-gateway.service',
          '/usr/share/licenses/iroh-link-gateway/LICENSE-MIT']
 CHECK = 'iroh-link-gateway --help >/dev/null && ' + ' && '.join(f"test -f '{path}'" for path in FILES)

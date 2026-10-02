@@ -9,10 +9,11 @@ import tomllib
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from stage import ROOT, checksum, version
+from build import ARCHITECTURES as FILE_ARCHITECTURES
 
 HERE = pathlib.Path(__file__).resolve().parent
 ARCHITECTURES = {'x86_64-unknown-linux-musl': 'amd64', 'aarch64-unknown-linux-musl': 'arm64'}
-PACKAGERS = ['deb', 'rpm', 'archlinux']
+PACKAGERS = {'deb': '.deb', 'rpm': '.rpm', 'archlinux': '.pkg.tar.zst'}
 MAINTAINER = 'n0 team <hello@n0.computer>'
 
 def copyright():
@@ -85,13 +86,17 @@ def build(target):
         path = work / 'nfpm.yaml'
         path.write_text(json.dumps(config(target, work), indent=2))
         packages = []
-        for packager in PACKAGERS:
+        for packager, suffix in PACKAGERS.items():
             output = pathlib.Path(temporary) / packager
             output.mkdir()
             subprocess.run(['nfpm', 'package', '--config', str(path), '--packager', packager,
                             '--target', str(output)], check=True)
             package = next(output.iterdir())
-            packages.append(pathlib.Path(shutil.move(package, dist / package.name)))
+            # Name the files like the archive, so the release lists each
+            # architecture together; the package metadata keeps the
+            # distribution's own architecture names and revision.
+            name = f'iroh-link-gateway-{version()}-linux-{FILE_ARCHITECTURES[target]}{suffix}'
+            packages.append(pathlib.Path(shutil.move(package, dist / name)))
     for package in packages:
         checksum(package)
     return packages
