@@ -1786,6 +1786,7 @@ dependencies = [
  "postcard",
  "rand",
  "reqwest",
+ "rustls",
  "serde_json",
  "simple-dns",
  "tempfile",

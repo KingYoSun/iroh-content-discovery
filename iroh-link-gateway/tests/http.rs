@@ -13,6 +13,13 @@ use n0_mainline::Dht;
 use reqwest::{Client, StatusCode};
 use udp_addr_index::{Limits, Server};
 
+/// reqwest 0.13 builds rustls without a crypto provider here, so install one
+/// before building a client.
+fn client_builder() -> reqwest::ClientBuilder {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    Client::builder()
+}
+
 /// Path separator in listing headings.
 const SEP: &str = "&nbsp;/&nbsp;<wbr>";
 
@@ -119,7 +126,7 @@ async fn run() {
             .await
             .unwrap();
     });
-    let client = Client::builder()
+    let client = client_builder()
         .no_proxy()
         .timeout(Duration::from_secs(15))
         .build()
@@ -547,7 +554,7 @@ async fn run() {
     // `{z32}.blake3.localhost` serves the same content with its own origin.
     let video_hash = z32::encode(video_tag.hash.as_bytes());
     let subdomain = |hash: &str| format!("{hash}.blake3.localhost");
-    let client = Client::builder()
+    let client = client_builder()
         .no_proxy()
         .timeout(Duration::from_secs(15))
         .resolve(&subdomain(&collection_hash), listen_addr)

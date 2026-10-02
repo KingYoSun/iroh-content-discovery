@@ -79,6 +79,7 @@ windows-sys = { version = "0.61", optional = true, features = ["Win32_Foundation
 tempfile = "3"
 udp-addr-index = { version = "0.1.0", path = "../udp-addr-index" }
 reqwest = { version = "0.13", default-features = false, features = ["stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tokio = { workspace = true, features = ["full"] }
 
 [lints]

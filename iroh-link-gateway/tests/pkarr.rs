@@ -14,6 +14,13 @@ use simple_dns::{
 };
 use udp_addr_index::{Limits, Server};
 
+/// reqwest 0.13 builds rustls without a crypto provider here, so install one
+/// before building a client.
+fn client_builder() -> reqwest::ClientBuilder {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    Client::builder()
+}
+
 async fn publish(dht: &Dht, key: &SigningKey, target: &str) {
     publish_ttl(dht, key, target, 0).await;
 }
@@ -114,7 +121,7 @@ async fn run() {
             .await
             .unwrap();
     });
-    let client = Client::builder()
+    let client = client_builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
@@ -140,7 +147,7 @@ async fn run() {
     }
     // The per-key origin resolves the same record as the path route.
     let encoded_key = z32::encode(key.verifying_key().as_bytes());
-    let origin_client = Client::builder()
+    let origin_client = client_builder()
         .redirect(reqwest::redirect::Policy::none())
         .resolve(&format!("{encoded_key}.pkarr.localhost"), listen_addr)
         .build()
