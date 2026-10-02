@@ -64,7 +64,7 @@ postcard.workspace = true
 simple-dns = "0.12"
 rand.workspace = true
 tokio.workspace = true
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.7", features = ["cors"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, optional = true }
 z32 = "1.3"
