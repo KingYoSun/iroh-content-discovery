@@ -174,7 +174,7 @@ Server configuration follows one priority order:
    of apex TXT `IPv4:port` records, publishable with iroh-share. It defaults to
    the list maintained by n0,
    `z6rb8uoy1pwuckhw8qx8i4qseczujxw4qakpe7xng3yi68wpyrqo`. See
-   [publishing a list](../README.md#curated-bootstrap-list-pkarr).
+   [publishing a list](../iroh-mainline-endpoint-discovery/README.md#curated-server-list-pkarr).
 3. `--rendezvous-hash HEX` (`IROH_ADDR_INDEX_RENDEZVOUS`) enables the untrusted
    rendezvous fallback, for example with the protocol hash
    `b86c3d910e1a67ec9ba8a69a95bd7f8b08be923b`. It is off by default.

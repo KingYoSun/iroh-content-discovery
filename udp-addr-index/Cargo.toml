@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-readme = "../README.md"
+readme = "README.md"
 keywords = ["udp", "p2p", "directory"]
 categories = ["network-programming"]
 
