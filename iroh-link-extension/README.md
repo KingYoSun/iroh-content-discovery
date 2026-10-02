@@ -31,6 +31,9 @@ The gateway validates public keys. Both domains use the same port.
 
 ## Install in Chrome or Brave
 
+Install iroh link from the [Chrome Web Store][chrome-store]. The steps below
+load this directory unpacked instead, for development.
+
 1. Open `chrome://extensions` in Chrome or `brave://extensions` in Brave.
 2. Enable **Developer mode**.
 3. Click **Load unpacked**, then choose this `iroh-link-extension` directory
@@ -206,3 +209,5 @@ at your option.
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in this project by you, as defined in the Apache-2.0 license, shall
 be dual licensed as above, without any additional terms or conditions.
+
+[chrome-store]: https://chromewebstore.google.com/detail/iroh-link/aajlbmaphckgbinhnifpiggcmdfnofcd

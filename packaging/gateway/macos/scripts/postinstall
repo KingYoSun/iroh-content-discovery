@@ -4,4 +4,6 @@ if [ "$(id -u)" -eq 0 ]; then
     echo 'Install Iroh Link Gateway for your own user account, without sudo.' >&2
     exit 1
 fi
+# Older versions installed unpacked extension files here.
+/bin/rm -rf "$HOME/Applications/Iroh Link Gateway Extensions"
 "$HOME/Applications/Iroh Link Gateway.app/Contents/MacOS/iroh-link-gateway-background" install-agent

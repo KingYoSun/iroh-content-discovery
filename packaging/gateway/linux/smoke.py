@@ -41,9 +41,7 @@ def portable(app, work):
     assert 'dynamically linked' not in linkage and 'interpreter' not in linkage, linkage
     assert not (app / 'iroh-link-gateway-background').exists()
     for name in ['README.md', 'LICENSE-APACHE', 'LICENSE-MIT', 'install.sh',
-                 'systemd/system/iroh-link-gateway.service', 'systemd/user/iroh-link-gateway.service',
-                 'extensions/chrome/manifest.json', 'extensions/firefox/manifest.json',
-                 'extensions/iroh-link-firefox-unsigned.xpi', 'extensions/Install extensions.html']:
+                 'systemd/system/iroh-link-gateway.service', 'systemd/user/iroh-link-gateway.service']:
         assert (app / name).is_file(), name
     assert os.access(app / 'install.sh', os.X_OK)
     # Run the gateway as the systemd units do. Avoid public discovery dependencies in the test.
@@ -80,8 +78,7 @@ def installed(app, label, prefix, systemctl, bin, share, unit):
             subprocess.run([*systemctl, 'is-enabled', '--quiet', service], check=True)
         if label == 'user':
             assert 'ExecStart=%h/.local/bin/iroh-link-gateway ' in unit.read_text()
-        for path in [bin / 'iroh-link-gateway', unit,
-                     share / 'extensions/chrome/manifest.json', share / 'extensions/Install extensions.html']:
+        for path in [bin / 'iroh-link-gateway', unit]:
             assert path.is_file(), path
         run('uninstall', '--uninstall')
         assert not (bin / 'iroh-link-gateway').exists()
@@ -102,7 +99,7 @@ if __name__ == '__main__':
             tar.extractall(work, filter='data')
         app = work / archive.name.removesuffix('.tar.gz')
         portable(app, work)
-        passed = 'static binary, local extensions, start, stop'
+        passed = 'static binary, start, stop'
         # Installing changes the machine, so it runs only on an ephemeral CI runner.
         if os.environ.get('CI') == 'true':
             home = Path.home()

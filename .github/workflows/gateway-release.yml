@@ -5,7 +5,6 @@ on:
   pull_request:
     paths:
       - 'iroh-link-gateway/**'
-      - 'iroh-link-extension/**'
       - 'packaging/gateway/**'
       - '.github/workflows/gateway-release.yml'
       - 'Cargo.toml'
@@ -45,11 +44,6 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: python -c "import os,tomllib; v=tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version']; assert os.environ['RELEASE_TAG'] == 'gateway-v'+v, 'Tag must match workspace version'"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - run: node --test iroh-link-extension/rules.test.js
-      - run: python -m unittest discover -s packaging/gateway -p 'test_*.py'
       - name: Install musl toolchain
         if: runner.os == 'Linux'
         env:

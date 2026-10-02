@@ -38,8 +38,7 @@ try:
     status()
     assert agent.is_file()
     assert app.stat().st_uid == os.getuid()
-    for name in ['chrome/manifest.json', 'firefox/manifest.json', 'iroh-link-firefox-unsigned.xpi', 'Install extensions.html']:
-        assert (extensions / name).is_file(), name
+    assert not extensions.exists()
     install('upgrade')
     status()
     assert (state / 'arguments.json').read_text() == settings
@@ -50,7 +49,7 @@ try:
     assert not app.exists() and not agent.exists() and not extensions.exists()
     assert not (state / 'ready').exists()
     assert (state / 'arguments.json').read_text() == settings
-    print('PASS: per-user package, LaunchAgent, local extensions, upgrade, uninstall, settings retention')
+    print('PASS: per-user package, LaunchAgent, upgrade, uninstall, settings retention')
 finally:
     for name in ['gateway.log', 'launcher.log']:
         path = state / name
