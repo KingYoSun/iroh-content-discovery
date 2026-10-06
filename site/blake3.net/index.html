@@ -20,7 +20,7 @@ by its <a href="https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3">BLAK
 fetches it directly from them, and checks it against the hash, so it doesn't
 matter who serves it.</p>
 <p>A link like <code>https://&lt;key&gt;.pkarr.net/</code> names a public key.
-The key's owner publishes a signed record saying what the name points to, and
+The key's owner publishes a signed <a href="https://pubky.org/pkarr/">pkarr</a> record saying what the name points to, and
 can update it at any time. Your gateway looks up the record, verifies the
 signature, and opens the content it points to.</p>
 <p>blake3.net and pkarr.net <em>never see these requests</em>: the browser extension sends the links
