@@ -83,6 +83,13 @@ links inside a collection, such as `/style.css` in an HTML page, resolve
 within it. Listings served this way link to `/<path>` instead of
 `/blake3/<z32>/<path>`.
 
+The `/blake3` and `/pkarr` paths share one origin for all content, so their
+responses carry `Content-Security-Policy: sandbox allow-downloads`: pages
+there render without scripts, forms or storage. They stay useful for
+downloads and for tools such as wget, which cannot resolve subdomains of
+`localhost` on every system. Pages that need scripts work on the subdomains,
+which the browser extension uses.
+
 `<z32>` is the canonical lowercase **z-base-32 encoding of the 32-byte BLAKE3
 hash** (52 characters), not hex or RFC 4648 base32. In Rust:
 

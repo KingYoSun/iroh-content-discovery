@@ -163,6 +163,11 @@ async fn run() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+    // All paths share one origin, so pages served there are sandboxed.
+    assert_eq!(
+        res.headers()["content-security-policy"],
+        "sandbox allow-downloads"
+    );
     assert_eq!(res.bytes().await.unwrap().as_ref(), text);
     let res = client
         .get(format!("{collection_url}/notes/readme.md"))
@@ -566,6 +571,8 @@ async fn run() {
     let site = origin(&collection_hash);
     let res = client.get(format!("{site}/")).send().await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+    // A subdomain is its own origin, so its pages are not sandboxed.
+    assert!(res.headers().get("content-security-policy").is_none());
     let html = res.text().await.unwrap();
     assert!(html.contains("href=\"/site/\""));
     assert!(html.contains("href=\"/video.mp4\""));
