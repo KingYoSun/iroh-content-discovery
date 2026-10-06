@@ -17,8 +17,8 @@ use axum::{
     Extension, Router,
     body::Body,
     extract::{Path, RawQuery, Request, State},
-    http::{HeaderMap, Method, StatusCode, Uri, header},
-    middleware::map_request,
+    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
+    middleware::{Next, from_fn, map_request},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -165,7 +165,8 @@ impl Gateway {
     ///
     /// Requests to `http://{z32}.blake3.localhost/{path}` and
     /// `http://{z32}.pkarr.localhost/{path}` are handled like the matching
-    /// path, giving each hash and key its own browser origin.
+    /// path, giving each hash and key its own browser origin. Responses to the
+    /// paths themselves are sandboxed, since they all share one origin.
     pub fn router(&self) -> Router {
         let routes = Router::new()
             .route("/pkarr/{key}", get(pkarr_redirect::redirect))
@@ -179,6 +180,8 @@ impl Gateway {
         // the fallback of an otherwise empty router.
         Router::new()
             .fallback_service(routes)
+            // Inside the rewrite, so it sees which requests came by subdomain.
+            .layer(from_fn(sandbox_path_routes))
             .layer(map_request(rewrite_subdomain))
             .layer(
                 CorsLayer::new()
@@ -613,6 +616,28 @@ async fn rewrite_subdomain(mut request: Request) -> Request {
         request.extensions_mut().insert(Subdomain);
     }
     request
+}
+
+/// Policy for responses to requests that did not come by subdomain.
+///
+/// Downloads stay allowed so listings' `?download` links keep working.
+const PATH_SANDBOX: HeaderValue = HeaderValue::from_static("sandbox allow-downloads");
+
+/// Sandboxes responses to requests that did not come by subdomain.
+///
+/// The `/blake3` and `/pkarr` paths serve every hash and key from one origin,
+/// where pages would share storage and could script each other. The paths
+/// stay for downloads and tools like wget, which cannot resolve subdomains of
+/// `localhost` everywhere; pages that need scripts get their own origin.
+async fn sandbox_path_routes(request: Request, next: Next) -> Response {
+    let subdomain = request.extensions().get::<Subdomain>().is_some();
+    let mut response = next.run(request).await;
+    if !subdomain {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_SECURITY_POLICY, PATH_SANDBOX);
+    }
+    response
 }
 
 /// Adds a charset to textual content types that carry none.
