@@ -16,14 +16,14 @@ from peers over iroh, through a gateway running on your own machine.</p>
 
 <h2>How the links work</h2>
 <p>A link like <code>https://&lt;hash&gt;.blake3.net/file</code> names content
-by its BLAKE3 hash. Your local gateway finds a peer that has the content,
+by its <a href="https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3">BLAKE3</a> hash. Your local gateway finds a peer that has the content,
 fetches it directly from them, and checks it against the hash, so it doesn't
 matter who serves it.</p>
 <p>A link like <code>https://&lt;key&gt;.pkarr.net/</code> names a public key.
 The key's owner publishes a signed record saying what the name points to, and
 can update it at any time. Your gateway looks up the record, verifies the
 signature, and opens the content it points to.</p>
-<p>blake3.net and pkarr.net never see these requests: the browser extension sends the links
+<p>blake3.net and pkarr.net <em>never see these requests</em>: the browser extension sends the links
 straight to the gateway on your machine. Without the extension and gateway, the
 links don't open.</p>
 
@@ -32,9 +32,8 @@ links don't open.</p>
   <li>Install the <a href="https://github.com/n0-computer/iroh-content-discovery/releases">gateway</a>
     for Windows or macOS. It runs in the background.</li>
   <li>Install the iroh link browser extension for
-    <a href="https://chromewebstore.google.com/detail/iroh-link/aajlbmaphckgbinhnifpiggcmdfnofcd">Chrome or Brave</a>.
-    The Firefox version is awaiting review; until then you can
-    <a href="https://github.com/n0-computer/iroh-content-discovery/tree/main/iroh-link-extension#install-in-firefox">load it as a temporary add-on</a>.</li>
+    <a href="https://chromewebstore.google.com/detail/iroh-link/aajlbmaphckgbinhnifpiggcmdfnofcd">Chrome or Brave</a>
+    or <a href="https://addons.mozilla.org/firefox/addon/iroh-link/">Firefox</a>.</li>
   <li>Open a <code>blake3.net</code> or <code>pkarr.net</code> link, for example:
     <ul>
       <li><a href="https://y7rmokt6h5mryuauw83em4u1br6tqrukaw3ngtde7zp8p3bg6hto.blake3.net/">A collection of public domain content</a>
