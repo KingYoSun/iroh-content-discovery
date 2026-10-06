@@ -152,7 +152,7 @@ lookups `502`, and lookup timeouts `504`.
 Content targets are served inline, so the key stays in the address bar, the
 bytes stay verified against the hash, and collections are served in place with
 the same query flags as `/blake3`. A collection with a top-level `index.html`
-redirects from `/pkarr/<key>` to `/pkarr/<key>/` (`301`, revalidated like the
+redirects from `/pkarr/<key>` to `/pkarr/<key>/` (`302`, revalidated like the
 content) and serves the page. The key keeps one origin as its content
 changes, which a per-hash URL cannot. This route can be used directly on
 localhost; the extension also routes

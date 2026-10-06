@@ -200,7 +200,7 @@ async fn run() {
     );
     publish(&publisher, &key, &target).await;
     let response = client.get(&url).send().await.unwrap();
-    assert_eq!(response.status(), StatusCode::MOVED_PERMANENTLY);
+    assert_eq!(response.status(), StatusCode::FOUND);
     assert_eq!(
         response.headers()["location"],
         format!("/pkarr/{encoded_key}/")

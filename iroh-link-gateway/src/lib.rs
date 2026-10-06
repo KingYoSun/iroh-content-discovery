@@ -679,6 +679,18 @@ impl Caching {
             Self::Revalidate => "public, no-cache",
         }
     }
+
+    /// Status for a redirect: permanent only when the content cannot change.
+    ///
+    /// A Pkarr key can later point at content where the redirect is wrong, so
+    /// it gets a temporary one rather than relying on `no-cache` being honored
+    /// for a permanent redirect.
+    fn redirect_status(self) -> StatusCode {
+        match self {
+            Self::Immutable => StatusCode::MOVED_PERMANENTLY,
+            Self::Revalidate => StatusCode::FOUND,
+        }
+    }
 }
 
 /// The collection a listing belongs to, and the path its links start with.
@@ -940,7 +952,7 @@ async fn collection_entry(
                 location.push_str(query);
             }
             return Ok(Response::builder()
-                .status(StatusCode::MOVED_PERMANENTLY)
+                .status(root.caching.redirect_status())
                 .header(header::LOCATION, location)
                 .header(header::CACHE_CONTROL, root.caching.header())
                 .body(Body::empty())
