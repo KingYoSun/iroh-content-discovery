@@ -18,7 +18,7 @@ use udp_addr_index_proto::{
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Most publishes, and most lookups, waiting for answers at once.
-const MAX_PENDING: usize = 256;
+const MAX_PENDING: usize = 512;
 
 /// UDP address-index client error.
 #[n0_error::stack_error(derive, add_meta)]
@@ -72,7 +72,7 @@ enum ActorMsg {
 /// Address-index client attached to a Mainline node's UDP socket.
 ///
 /// Dropping a call gives its operation up: one not sent yet is not sent, and
-/// one under way stops waiting for answers. Up to 256 publishes and 256
+/// one under way stops waiting for answers. Up to 512 publishes and 512
 /// lookups wait for answers at once; beyond that a call fails with
 /// [`UdpError::Busy`].
 #[derive(Debug, Clone)]
@@ -303,11 +303,16 @@ impl Actor {
         self.resolves.remove(&tx);
     }
 
-    async fn handle_message(&mut self, message: ActorMsg, buf: &mut [u8; MAX_DGRAM]) {
-        // Operations given up first, so that they leave room for this one.
+    /// Forgets the operations given up so far, so that they leave room for new
+    /// ones and get no further request.
+    fn withdraw_cancelled(&mut self) {
         while let Ok(tx) = self.cancelled.try_recv() {
             self.withdraw(tx);
         }
+    }
+
+    async fn handle_message(&mut self, message: ActorMsg, buf: &mut [u8; MAX_DGRAM]) {
+        self.withdraw_cancelled();
         match message {
             ActorMsg::ReplaceServers(servers) => {
                 self.servers = servers;
@@ -398,6 +403,7 @@ impl Actor {
     }
 
     async fn handle_packet(&mut self, data: &[u8], from: SocketAddrV4, buf: &mut [u8; MAX_DGRAM]) {
+        self.withdraw_cancelled();
         let Some(Proto::Response(Response::V1(response))) = Proto::decode(data) else {
             return;
         };
@@ -671,7 +677,7 @@ mod tests {
         let client = client(server, Duration::from_secs(60)).await;
         let mut lookups = Vec::new();
         // One at a time, so that the server receives every request.
-        for port in 0..256 {
+        for port in 0..512 {
             lookups.push(tokio::spawn({
                 let client = client.clone();
                 async move { client.resolve(peer(port)).await }
@@ -680,7 +686,7 @@ mod tests {
         }
 
         let refused =
-            tokio::time::timeout(Duration::from_millis(500), client.resolve(peer(256))).await;
+            tokio::time::timeout(Duration::from_millis(500), client.resolve(peer(512))).await;
         assert!(
             matches!(refused, Ok(Err(_))),
             "the lookup over the limit was accepted"
@@ -692,9 +698,9 @@ mod tests {
         }
         let next = tokio::spawn({
             let client = client.clone();
-            async move { client.resolve(peer(257)).await }
+            async move { client.resolve(peer(513)).await }
         });
-        wait_for(|| received.gets.load(Ordering::SeqCst) == 257).await;
+        wait_for(|| received.gets.load(Ordering::SeqCst) == 513).await;
         next.abort();
     }
 
