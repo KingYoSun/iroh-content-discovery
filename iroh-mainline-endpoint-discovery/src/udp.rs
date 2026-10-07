@@ -17,6 +17,9 @@ use udp_addr_index_proto::{
 /// Default timeout for an address-index operation.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Most publishes, and most lookups, waiting for answers at once.
+const MAX_PENDING: usize = 256;
+
 /// UDP address-index client error.
 #[n0_error::stack_error(derive, add_meta)]
 pub enum UdpError {
@@ -38,6 +41,9 @@ pub enum UdpError {
     /// The client actor stopped.
     #[error("UDP client closed")]
     Closed {},
+    /// As many operations of this kind as the client allows wait for answers already.
+    #[error("too many UDP operations waiting for answers")]
+    Busy {},
 }
 
 /// Decides whether a looked-up value is good enough to stop waiting for others.
@@ -51,10 +57,12 @@ enum ActorMsg {
     ReplaceServers(HashSet<SocketAddrV4>),
     RemoveServer(SocketAddrV4),
     Publish(
+        TransactionId,
         ValueFor,
         oneshot::Sender<Result<Vec<SocketAddrV4>, UdpError>>,
     ),
     Resolve(
+        TransactionId,
         SocketAddrV4,
         Option<Accept>,
         oneshot::Sender<Result<ResolveResult, UdpError>>,
@@ -62,9 +70,31 @@ enum ActorMsg {
 }
 
 /// Address-index client attached to a Mainline node's UDP socket.
+///
+/// Dropping a call gives its operation up: one not sent yet is not sent, and
+/// one under way stops waiting for answers. Up to 256 publishes and 256
+/// lookups wait for answers at once; beyond that a call fails with
+/// [`UdpError::Busy`].
 #[derive(Debug, Clone)]
 pub struct UdpClient {
     tx: mpsc::Sender<ActorMsg>,
+    /// Operations given up by their callers. Each sends at most one, so this
+    /// holds at most as many as there are operations.
+    cancels: mpsc::UnboundedSender<TransactionId>,
+}
+
+/// Gives an operation up when dropped before it finished.
+struct Withdraw<'a> {
+    cancels: &'a mpsc::UnboundedSender<TransactionId>,
+    tx: Option<TransactionId>,
+}
+
+impl Drop for Withdraw<'_> {
+    fn drop(&mut self) {
+        if let Some(tx) = self.tx {
+            let _ = self.cancels.send(tx);
+        }
+    }
 }
 
 impl UdpClient {
@@ -87,8 +117,9 @@ impl UdpClient {
         })))
         .await?;
         let (tx, rx) = mpsc::channel(32);
-        tokio::spawn(Actor::new(dht, incoming_rx, rx, timeout).run());
-        Ok(Self { tx })
+        let (cancels, cancelled) = mpsc::unbounded_channel();
+        tokio::spawn(Actor::new(dht, incoming_rx, rx, cancelled, timeout).run());
+        Ok(Self { tx, cancels })
     }
 
     /// Adds a server used by subsequent operations.
@@ -128,12 +159,9 @@ impl UdpClient {
         &self,
         value: impl Fn(SocketAddrV4) -> Vec<u8> + Send + 'static,
     ) -> Result<Vec<SocketAddrV4>, UdpError> {
-        let (tx, rx) = oneshot::channel();
-        self.tx
-            .send(ActorMsg::Publish(Box::new(value), tx))
+        let (response, rx) = oneshot::channel();
+        self.run(|tx| ActorMsg::Publish(tx, Box::new(value), response), rx)
             .await
-            .map_err(|_| e!(UdpError::Closed))?;
-        rx.await.map_err(|_| e!(UdpError::Closed))?
     }
 
     /// Reads and deduplicates opaque values from all configured servers.
@@ -158,12 +186,32 @@ impl UdpClient {
         addr: SocketAddrV4,
         accept: Option<Accept>,
     ) -> Result<ResolveResult, UdpError> {
-        let (tx, rx) = oneshot::channel();
+        let (response, rx) = oneshot::channel();
+        self.run(|tx| ActorMsg::Resolve(tx, addr, accept, response), rx)
+            .await
+    }
+
+    /// Hands an operation to the actor and waits for its result, giving it up
+    /// if dropped before.
+    async fn run<T>(
+        &self,
+        message: impl FnOnce(TransactionId) -> ActorMsg,
+        result: oneshot::Receiver<Result<T, UdpError>>,
+    ) -> Result<T, UdpError> {
+        // Our socket and the servers we talk to are both public, so a
+        // predictable id would be enough to answer on a server's behalf.
+        let tx = rand::random();
+        let mut withdraw = Withdraw {
+            cancels: &self.cancels,
+            tx: Some(tx),
+        };
         self.tx
-            .send(ActorMsg::Resolve(addr, accept, tx))
+            .send(message(tx))
             .await
             .map_err(|_| e!(UdpError::Closed))?;
-        rx.await.map_err(|_| e!(UdpError::Closed))?
+        let result = result.await;
+        withdraw.tx = None;
+        result.map_err(|_| e!(UdpError::Closed))?
     }
 }
 
@@ -203,6 +251,7 @@ struct Actor {
     dht: Dht,
     incoming: mpsc::Receiver<(Box<[u8]>, SocketAddrV4)>,
     rx: mpsc::Receiver<ActorMsg>,
+    cancelled: mpsc::UnboundedReceiver<TransactionId>,
     servers: HashSet<SocketAddrV4>,
     publishes: HashMap<TransactionId, PendingPublish>,
     resolves: HashMap<TransactionId, PendingResolve>,
@@ -214,12 +263,14 @@ impl Actor {
         dht: Dht,
         incoming: mpsc::Receiver<(Box<[u8]>, SocketAddrV4)>,
         rx: mpsc::Receiver<ActorMsg>,
+        cancelled: mpsc::UnboundedReceiver<TransactionId>,
         timeout: Duration,
     ) -> Self {
         Self {
             dht,
             incoming,
             rx,
+            cancelled,
             servers: HashSet::new(),
             publishes: HashMap::new(),
             resolves: HashMap::new(),
@@ -240,20 +291,23 @@ impl Actor {
                     Some((data, from)) => self.handle_packet(&data, from, &mut send_buf).await,
                     None => break,
                 },
+                Some(tx) = self.cancelled.recv() => self.withdraw(tx),
                 _ = sleep_until(deadline) => self.flush_expired(),
             }
         }
     }
 
-    /// Returns a transaction id an off-path attacker cannot guess.
-    ///
-    /// Our socket and the servers we talk to are both public, so a predictable
-    /// id would be enough to answer a lookup on a server's behalf.
-    fn next_id(&mut self) -> TransactionId {
-        rand::random()
+    /// Forgets an operation its caller gave up.
+    fn withdraw(&mut self, tx: TransactionId) {
+        self.publishes.remove(&tx);
+        self.resolves.remove(&tx);
     }
 
     async fn handle_message(&mut self, message: ActorMsg, buf: &mut [u8; MAX_DGRAM]) {
+        // Operations given up first, so that they leave room for this one.
+        while let Ok(tx) = self.cancelled.try_recv() {
+            self.withdraw(tx);
+        }
         match message {
             ActorMsg::ReplaceServers(servers) => {
                 self.servers = servers;
@@ -264,12 +318,19 @@ impl Actor {
             ActorMsg::RemoveServer(addr) => {
                 self.servers.remove(&addr);
             }
-            ActorMsg::Publish(value, response) => {
+            ActorMsg::Publish(tx, value, response) => {
+                // The caller gave up before the request went out.
+                if response.is_closed() {
+                    return;
+                }
                 if self.servers.is_empty() {
                     let _ = response.send(Err(e!(UdpError::NoServers)));
                     return;
                 }
-                let tx = self.next_id();
+                if self.publishes.len() >= MAX_PENDING {
+                    let _ = response.send(Err(e!(UdpError::Busy)));
+                    return;
+                }
                 let request = Request::V1(RequestV1::Prepare {
                     tx,
                     padding: [0; 24],
@@ -296,12 +357,19 @@ impl Actor {
                     let _ = response.send(Err(e!(UdpError::TooLarge)));
                 }
             }
-            ActorMsg::Resolve(addr, accept, response) => {
+            ActorMsg::Resolve(tx, addr, accept, response) => {
+                // The caller gave up before the request went out.
+                if response.is_closed() {
+                    return;
+                }
                 if self.servers.is_empty() {
                     let _ = response.send(Err(e!(UdpError::NoServers)));
                     return;
                 }
-                let tx = self.next_id();
+                if self.resolves.len() >= MAX_PENDING {
+                    let _ = response.send(Err(e!(UdpError::Busy)));
+                    return;
+                }
                 let request = Request::V1(RequestV1::Get { tx, addr });
                 if let Some(bytes) = encode(request, buf) {
                     for server in &self.servers {
