@@ -10,6 +10,7 @@
 use data_encoding::{HEXLOWER, HEXLOWER_PERMISSIVE};
 
 mod addr_index;
+mod announcer;
 mod index_keeper;
 mod lookup_cache;
 mod pkarr;
@@ -23,6 +24,7 @@ mod udp;
 pub use addr_index::{
     AddrIndex, AddrIndexBuilder, AddrIndexError, DEFAULT_INDEX_LIST_KEY, DEFAULT_LOOKUP_CACHE_TTL,
 };
+pub use announcer::Announcer;
 pub use blake3::Hash;
 pub use pkarr::{
     BLAKE3_DOMAIN, PKARR_DOMAIN, PKARR_REFRESH, PkarrPublisher, decode_signed_packet,

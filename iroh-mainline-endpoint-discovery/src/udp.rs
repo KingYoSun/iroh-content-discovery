@@ -17,6 +17,9 @@ use udp_addr_index_proto::{
 /// Default timeout for an address-index operation.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Most publishes, and most lookups, waiting for answers at once.
+const MAX_PENDING: usize = 512;
+
 /// UDP address-index client error.
 #[n0_error::stack_error(derive, add_meta)]
 pub enum UdpError {
@@ -38,6 +41,9 @@ pub enum UdpError {
     /// The client actor stopped.
     #[error("UDP client closed")]
     Closed {},
+    /// As many operations of this kind as the client allows wait for answers already.
+    #[error("too many UDP operations waiting for answers")]
+    Busy {},
 }
 
 /// Decides whether a looked-up value is good enough to stop waiting for others.
@@ -51,10 +57,12 @@ enum ActorMsg {
     ReplaceServers(HashSet<SocketAddrV4>),
     RemoveServer(SocketAddrV4),
     Publish(
+        TransactionId,
         ValueFor,
         oneshot::Sender<Result<Vec<SocketAddrV4>, UdpError>>,
     ),
     Resolve(
+        TransactionId,
         SocketAddrV4,
         Option<Accept>,
         oneshot::Sender<Result<ResolveResult, UdpError>>,
@@ -62,9 +70,31 @@ enum ActorMsg {
 }
 
 /// Address-index client attached to a Mainline node's UDP socket.
+///
+/// Dropping a call gives its operation up: one not sent yet is not sent, and
+/// one under way stops waiting for answers. Up to 512 publishes and 512
+/// lookups wait for answers at once; beyond that a call fails with
+/// [`UdpError::Busy`].
 #[derive(Debug, Clone)]
 pub struct UdpClient {
     tx: mpsc::Sender<ActorMsg>,
+    /// Operations given up by their callers. Each sends at most one, so this
+    /// holds at most as many as there are operations.
+    cancels: mpsc::UnboundedSender<TransactionId>,
+}
+
+/// Gives an operation up when dropped before it finished.
+struct Withdraw<'a> {
+    cancels: &'a mpsc::UnboundedSender<TransactionId>,
+    tx: Option<TransactionId>,
+}
+
+impl Drop for Withdraw<'_> {
+    fn drop(&mut self) {
+        if let Some(tx) = self.tx {
+            let _ = self.cancels.send(tx);
+        }
+    }
 }
 
 impl UdpClient {
@@ -87,8 +117,9 @@ impl UdpClient {
         })))
         .await?;
         let (tx, rx) = mpsc::channel(32);
-        tokio::spawn(Actor::new(dht, incoming_rx, rx, timeout).run());
-        Ok(Self { tx })
+        let (cancels, cancelled) = mpsc::unbounded_channel();
+        tokio::spawn(Actor::new(dht, incoming_rx, rx, cancelled, timeout).run());
+        Ok(Self { tx, cancels })
     }
 
     /// Adds a server used by subsequent operations.
@@ -128,12 +159,9 @@ impl UdpClient {
         &self,
         value: impl Fn(SocketAddrV4) -> Vec<u8> + Send + 'static,
     ) -> Result<Vec<SocketAddrV4>, UdpError> {
-        let (tx, rx) = oneshot::channel();
-        self.tx
-            .send(ActorMsg::Publish(Box::new(value), tx))
+        let (response, rx) = oneshot::channel();
+        self.run(|tx| ActorMsg::Publish(tx, Box::new(value), response), rx)
             .await
-            .map_err(|_| e!(UdpError::Closed))?;
-        rx.await.map_err(|_| e!(UdpError::Closed))?
     }
 
     /// Reads and deduplicates opaque values from all configured servers.
@@ -158,12 +186,32 @@ impl UdpClient {
         addr: SocketAddrV4,
         accept: Option<Accept>,
     ) -> Result<ResolveResult, UdpError> {
-        let (tx, rx) = oneshot::channel();
+        let (response, rx) = oneshot::channel();
+        self.run(|tx| ActorMsg::Resolve(tx, addr, accept, response), rx)
+            .await
+    }
+
+    /// Hands an operation to the actor and waits for its result, giving it up
+    /// if dropped before.
+    async fn run<T>(
+        &self,
+        message: impl FnOnce(TransactionId) -> ActorMsg,
+        result: oneshot::Receiver<Result<T, UdpError>>,
+    ) -> Result<T, UdpError> {
+        // Our socket and the servers we talk to are both public, so a
+        // predictable id would be enough to answer on a server's behalf.
+        let tx = rand::random();
+        let mut withdraw = Withdraw {
+            cancels: &self.cancels,
+            tx: Some(tx),
+        };
         self.tx
-            .send(ActorMsg::Resolve(addr, accept, tx))
+            .send(message(tx))
             .await
             .map_err(|_| e!(UdpError::Closed))?;
-        rx.await.map_err(|_| e!(UdpError::Closed))?
+        let result = result.await;
+        withdraw.tx = None;
+        result.map_err(|_| e!(UdpError::Closed))?
     }
 }
 
@@ -203,6 +251,7 @@ struct Actor {
     dht: Dht,
     incoming: mpsc::Receiver<(Box<[u8]>, SocketAddrV4)>,
     rx: mpsc::Receiver<ActorMsg>,
+    cancelled: mpsc::UnboundedReceiver<TransactionId>,
     servers: HashSet<SocketAddrV4>,
     publishes: HashMap<TransactionId, PendingPublish>,
     resolves: HashMap<TransactionId, PendingResolve>,
@@ -214,12 +263,14 @@ impl Actor {
         dht: Dht,
         incoming: mpsc::Receiver<(Box<[u8]>, SocketAddrV4)>,
         rx: mpsc::Receiver<ActorMsg>,
+        cancelled: mpsc::UnboundedReceiver<TransactionId>,
         timeout: Duration,
     ) -> Self {
         Self {
             dht,
             incoming,
             rx,
+            cancelled,
             servers: HashSet::new(),
             publishes: HashMap::new(),
             resolves: HashMap::new(),
@@ -240,20 +291,28 @@ impl Actor {
                     Some((data, from)) => self.handle_packet(&data, from, &mut send_buf).await,
                     None => break,
                 },
+                Some(tx) = self.cancelled.recv() => self.withdraw(tx),
                 _ = sleep_until(deadline) => self.flush_expired(),
             }
         }
     }
 
-    /// Returns a transaction id an off-path attacker cannot guess.
-    ///
-    /// Our socket and the servers we talk to are both public, so a predictable
-    /// id would be enough to answer a lookup on a server's behalf.
-    fn next_id(&mut self) -> TransactionId {
-        rand::random()
+    /// Forgets an operation its caller gave up.
+    fn withdraw(&mut self, tx: TransactionId) {
+        self.publishes.remove(&tx);
+        self.resolves.remove(&tx);
+    }
+
+    /// Forgets the operations given up so far, so that they leave room for new
+    /// ones and get no further request.
+    fn withdraw_cancelled(&mut self) {
+        while let Ok(tx) = self.cancelled.try_recv() {
+            self.withdraw(tx);
+        }
     }
 
     async fn handle_message(&mut self, message: ActorMsg, buf: &mut [u8; MAX_DGRAM]) {
+        self.withdraw_cancelled();
         match message {
             ActorMsg::ReplaceServers(servers) => {
                 self.servers = servers;
@@ -264,12 +323,19 @@ impl Actor {
             ActorMsg::RemoveServer(addr) => {
                 self.servers.remove(&addr);
             }
-            ActorMsg::Publish(value, response) => {
+            ActorMsg::Publish(tx, value, response) => {
+                // The caller gave up before the request went out.
+                if response.is_closed() {
+                    return;
+                }
                 if self.servers.is_empty() {
                     let _ = response.send(Err(e!(UdpError::NoServers)));
                     return;
                 }
-                let tx = self.next_id();
+                if self.publishes.len() >= MAX_PENDING {
+                    let _ = response.send(Err(e!(UdpError::Busy)));
+                    return;
+                }
                 let request = Request::V1(RequestV1::Prepare {
                     tx,
                     padding: [0; 24],
@@ -296,12 +362,19 @@ impl Actor {
                     let _ = response.send(Err(e!(UdpError::TooLarge)));
                 }
             }
-            ActorMsg::Resolve(addr, accept, response) => {
+            ActorMsg::Resolve(tx, addr, accept, response) => {
+                // The caller gave up before the request went out.
+                if response.is_closed() {
+                    return;
+                }
                 if self.servers.is_empty() {
                     let _ = response.send(Err(e!(UdpError::NoServers)));
                     return;
                 }
-                let tx = self.next_id();
+                if self.resolves.len() >= MAX_PENDING {
+                    let _ = response.send(Err(e!(UdpError::Busy)));
+                    return;
+                }
                 let request = Request::V1(RequestV1::Get { tx, addr });
                 if let Some(bytes) = encode(request, buf) {
                     for server in &self.servers {
@@ -330,6 +403,7 @@ impl Actor {
     }
 
     async fn handle_packet(&mut self, data: &[u8], from: SocketAddrV4, buf: &mut [u8; MAX_DGRAM]) {
+        self.withdraw_cancelled();
         let Some(Proto::Response(Response::V1(response))) = Proto::decode(data) else {
             return;
         };
@@ -480,5 +554,181 @@ async fn sleep_until(deadline: Option<tokio::time::Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,
         None => std::future::pending().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        net::{Ipv4Addr, SocketAddr},
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use n0_future::future::poll_once;
+    use tokio::net::UdpSocket;
+
+    use super::*;
+
+    /// The requests a fake index server received.
+    #[derive(Default)]
+    struct Received {
+        prepares: AtomicUsize,
+        puts: AtomicUsize,
+        gets: AtomicUsize,
+    }
+
+    /// An index server that never answers lookups, stores every put, and
+    /// answers a prepare with a token after `token_after`, if set.
+    async fn index_server(token_after: Option<Duration>) -> (SocketAddrV4, Arc<Received>) {
+        let socket = Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap());
+        let SocketAddr::V4(addr) = socket.local_addr().unwrap() else {
+            unreachable!("bound to an IPv4 address")
+        };
+        let received = Arc::new(Received::default());
+        let counted = received.clone();
+        tokio::spawn(async move {
+            let mut buf = [0; MAX_DGRAM];
+            loop {
+                // Windows reports an ICMP port unreachable as a receive error.
+                let Ok((len, SocketAddr::V4(from))) = socket.recv_from(&mut buf).await else {
+                    continue;
+                };
+                let Some(Proto::Request(Request::V1(request))) = Proto::decode(&buf[..len]) else {
+                    continue;
+                };
+                let response = match request {
+                    RequestV1::Prepare { tx, .. } => {
+                        counted.prepares.fetch_add(1, Ordering::SeqCst);
+                        let Some(delay) = token_after else {
+                            continue;
+                        };
+                        tokio::time::sleep(delay).await;
+                        ResponseV1::Prepared {
+                            tx,
+                            addr: from,
+                            token: [0; 16],
+                        }
+                    }
+                    RequestV1::Put { tx, .. } => {
+                        counted.puts.fetch_add(1, Ordering::SeqCst);
+                        ResponseV1::Stored { tx, addr: from }
+                    }
+                    RequestV1::Get { .. } => {
+                        counted.gets.fetch_add(1, Ordering::SeqCst);
+                        continue;
+                    }
+                };
+                let mut out = [0; MAX_DGRAM];
+                let response = Proto::Response(Response::V1(response));
+                let _ = socket
+                    .send_to(response.encode(&mut out).unwrap(), from)
+                    .await;
+            }
+        });
+        (addr, received)
+    }
+
+    async fn client(server: SocketAddrV4, timeout: Duration) -> UdpClient {
+        let dht = Dht::builder().no_bootstrap().port(0).build().unwrap();
+        let client = UdpClient::attach_with_timeout(dht, timeout).await.unwrap();
+        client.add_server(server).await.unwrap();
+        client
+    }
+
+    fn peer(port: u16) -> SocketAddrV4 {
+        SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 7), port)
+    }
+
+    async fn wait_for(condition: impl Fn() -> bool) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !condition() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the condition in time");
+    }
+
+    /// A lookup dropped before the client sent it is not sent.
+    #[tokio::test]
+    async fn a_lookup_dropped_before_it_is_sent_sends_nothing() {
+        let (server, received) = index_server(None).await;
+        let client = client(server, DEFAULT_TIMEOUT).await;
+        let mut lookup = Box::pin(client.resolve(peer(1)));
+        assert!(poll_once(&mut lookup).await.is_none());
+        drop(lookup);
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(
+            received.gets.load(Ordering::SeqCst),
+            0,
+            "the dropped lookup was sent"
+        );
+    }
+
+    /// Lookups beyond the limit fail at once, until dropped ones free their slots.
+    #[tokio::test]
+    async fn lookups_beyond_the_limit_are_refused_until_dropped_ones_free_their_slots() {
+        let (server, received) = index_server(None).await;
+        // Lookups wait for answers that never come, longer than the test runs.
+        let client = client(server, Duration::from_secs(60)).await;
+        let mut lookups = Vec::new();
+        // One at a time, so that the server receives every request.
+        for port in 0..512 {
+            lookups.push(tokio::spawn({
+                let client = client.clone();
+                async move { client.resolve(peer(port)).await }
+            }));
+            wait_for(|| received.gets.load(Ordering::SeqCst) == usize::from(port) + 1).await;
+        }
+
+        let refused =
+            tokio::time::timeout(Duration::from_millis(500), client.resolve(peer(512))).await;
+        assert!(
+            matches!(refused, Ok(Err(_))),
+            "the lookup over the limit was accepted"
+        );
+
+        for lookup in lookups {
+            lookup.abort();
+            let _ = lookup.await;
+        }
+        let next = tokio::spawn({
+            let client = client.clone();
+            async move { client.resolve(peer(513)).await }
+        });
+        wait_for(|| received.gets.load(Ordering::SeqCst) == 513).await;
+        next.abort();
+    }
+
+    /// A publish dropped before the server's token arrives stores no value.
+    #[tokio::test]
+    async fn a_publish_dropped_before_its_token_arrives_sends_no_value() {
+        let (server, received) = index_server(Some(Duration::from_millis(300))).await;
+        let client = client(server, Duration::from_secs(60)).await;
+        let publish = tokio::spawn({
+            let client = client.clone();
+            async move { client.publish(|_| vec![1, 2, 3]).await }
+        });
+        wait_for(|| received.prepares.load(Ordering::SeqCst) == 1).await;
+        publish.abort();
+        let _ = publish.await;
+
+        // The token arrives 300 ms after the prepare.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(
+            received.puts.load(Ordering::SeqCst),
+            0,
+            "the dropped publish sent its value"
+        );
+
+        // A publish that waits stores its value.
+        let stored =
+            tokio::time::timeout(Duration::from_secs(5), client.publish(|_| vec![4])).await;
+        assert!(matches!(stored, Ok(Ok(_))), "{stored:?}");
+        assert_eq!(received.puts.load(Ordering::SeqCst), 1);
     }
 }

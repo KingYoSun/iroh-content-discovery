@@ -168,7 +168,7 @@ impl State {
                 let _ = self.dht.bootstrapped().await;
                 public_address(&self.dht).await
             },
-            || self.publish_index(),
+            || publish_index(&self.index, &self.secret),
         );
         tokio::pin!(keeper);
         let mut records = self.keeper.subscribe();
@@ -261,19 +261,20 @@ impl State {
         entries.sort();
         entries
     }
+}
 
-    async fn publish_index(&self) -> Result<SocketAddrV4> {
-        self.index
-            .publish(&self.secret)
-            .await?
-            .first()
-            .copied()
-            .std_context("address-index publish returned no public mapping")
-    }
+/// Publishes the endpoint record, returning the socket a server stored it under.
+pub(crate) async fn publish_index(index: &AddrIndex, secret: &SecretKey) -> Result<SocketAddrV4> {
+    index
+        .publish(secret)
+        .await?
+        .first()
+        .copied()
+        .std_context("address-index publish returned no public mapping")
 }
 
 /// Returns the address Mainline sees us at, if it knows it yet.
-async fn public_address(dht: &Dht) -> Option<SocketAddrV4> {
+pub(crate) async fn public_address(dht: &Dht) -> Option<SocketAddrV4> {
     dht.info().await.ok()?.public_address()
 }
 

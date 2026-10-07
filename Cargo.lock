@@ -1807,6 +1807,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "udp-addr-index",
  "udp-addr-index-proto",
  "z32",
  "zeroize",
