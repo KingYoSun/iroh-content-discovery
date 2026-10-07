@@ -482,3 +482,179 @@ async fn sleep_until(deadline: Option<tokio::time::Instant>) {
         None => std::future::pending().await,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        net::{Ipv4Addr, SocketAddr},
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use n0_future::future::poll_once;
+    use tokio::net::UdpSocket;
+
+    use super::*;
+
+    /// The requests a fake index server received.
+    #[derive(Default)]
+    struct Received {
+        prepares: AtomicUsize,
+        puts: AtomicUsize,
+        gets: AtomicUsize,
+    }
+
+    /// An index server that never answers lookups, stores every put, and
+    /// answers a prepare with a token after `token_after`, if set.
+    async fn index_server(token_after: Option<Duration>) -> (SocketAddrV4, Arc<Received>) {
+        let socket = Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap());
+        let SocketAddr::V4(addr) = socket.local_addr().unwrap() else {
+            unreachable!("bound to an IPv4 address")
+        };
+        let received = Arc::new(Received::default());
+        let counted = received.clone();
+        tokio::spawn(async move {
+            let mut buf = [0; MAX_DGRAM];
+            loop {
+                // Windows reports an ICMP port unreachable as a receive error.
+                let Ok((len, SocketAddr::V4(from))) = socket.recv_from(&mut buf).await else {
+                    continue;
+                };
+                let Some(Proto::Request(Request::V1(request))) = Proto::decode(&buf[..len]) else {
+                    continue;
+                };
+                let response = match request {
+                    RequestV1::Prepare { tx, .. } => {
+                        counted.prepares.fetch_add(1, Ordering::SeqCst);
+                        let Some(delay) = token_after else {
+                            continue;
+                        };
+                        tokio::time::sleep(delay).await;
+                        ResponseV1::Prepared {
+                            tx,
+                            addr: from,
+                            token: [0; 16],
+                        }
+                    }
+                    RequestV1::Put { tx, .. } => {
+                        counted.puts.fetch_add(1, Ordering::SeqCst);
+                        ResponseV1::Stored { tx, addr: from }
+                    }
+                    RequestV1::Get { .. } => {
+                        counted.gets.fetch_add(1, Ordering::SeqCst);
+                        continue;
+                    }
+                };
+                let mut out = [0; MAX_DGRAM];
+                let response = Proto::Response(Response::V1(response));
+                let _ = socket
+                    .send_to(response.encode(&mut out).unwrap(), from)
+                    .await;
+            }
+        });
+        (addr, received)
+    }
+
+    async fn client(server: SocketAddrV4, timeout: Duration) -> UdpClient {
+        let dht = Dht::builder().no_bootstrap().port(0).build().unwrap();
+        let client = UdpClient::attach_with_timeout(dht, timeout).await.unwrap();
+        client.add_server(server).await.unwrap();
+        client
+    }
+
+    fn peer(port: u16) -> SocketAddrV4 {
+        SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 7), port)
+    }
+
+    async fn wait_for(condition: impl Fn() -> bool) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !condition() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the condition in time");
+    }
+
+    /// A lookup dropped before the client sent it is not sent.
+    #[tokio::test]
+    async fn a_lookup_dropped_before_it_is_sent_sends_nothing() {
+        let (server, received) = index_server(None).await;
+        let client = client(server, DEFAULT_TIMEOUT).await;
+        let mut lookup = Box::pin(client.resolve(peer(1)));
+        assert!(poll_once(&mut lookup).await.is_none());
+        drop(lookup);
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(
+            received.gets.load(Ordering::SeqCst),
+            0,
+            "the dropped lookup was sent"
+        );
+    }
+
+    /// Lookups beyond the limit fail at once, until dropped ones free their slots.
+    #[tokio::test]
+    async fn lookups_beyond_the_limit_are_refused_until_dropped_ones_free_their_slots() {
+        let (server, received) = index_server(None).await;
+        // Lookups wait for answers that never come, longer than the test runs.
+        let client = client(server, Duration::from_secs(60)).await;
+        let mut lookups = Vec::new();
+        // One at a time, so that the server receives every request.
+        for port in 0..256 {
+            lookups.push(tokio::spawn({
+                let client = client.clone();
+                async move { client.resolve(peer(port)).await }
+            }));
+            wait_for(|| received.gets.load(Ordering::SeqCst) == usize::from(port) + 1).await;
+        }
+
+        let refused =
+            tokio::time::timeout(Duration::from_millis(500), client.resolve(peer(256))).await;
+        assert!(
+            matches!(refused, Ok(Err(_))),
+            "the lookup over the limit was accepted"
+        );
+
+        for lookup in lookups {
+            lookup.abort();
+            let _ = lookup.await;
+        }
+        let next = tokio::spawn({
+            let client = client.clone();
+            async move { client.resolve(peer(257)).await }
+        });
+        wait_for(|| received.gets.load(Ordering::SeqCst) == 257).await;
+        next.abort();
+    }
+
+    /// A publish dropped before the server's token arrives stores no value.
+    #[tokio::test]
+    async fn a_publish_dropped_before_its_token_arrives_sends_no_value() {
+        let (server, received) = index_server(Some(Duration::from_millis(300))).await;
+        let client = client(server, Duration::from_secs(60)).await;
+        let publish = tokio::spawn({
+            let client = client.clone();
+            async move { client.publish(|_| vec![1, 2, 3]).await }
+        });
+        wait_for(|| received.prepares.load(Ordering::SeqCst) == 1).await;
+        publish.abort();
+        let _ = publish.await;
+
+        // The token arrives 300 ms after the prepare.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(
+            received.puts.load(Ordering::SeqCst),
+            0,
+            "the dropped publish sent its value"
+        );
+
+        // A publish that waits stores its value.
+        let stored =
+            tokio::time::timeout(Duration::from_secs(5), client.publish(|_| vec![4])).await;
+        assert!(matches!(stored, Ok(Ok(_))), "{stored:?}");
+        assert_eq!(received.puts.load(Ordering::SeqCst), 1);
+    }
+}

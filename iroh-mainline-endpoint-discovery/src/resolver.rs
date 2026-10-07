@@ -5,15 +5,19 @@
 //! infohash is opaque to this crate: BLAKE3 content is hashed to `SHA-1` at
 //! the call site.
 
-use std::collections::{HashSet, VecDeque};
+use std::{
+    collections::{HashSet, VecDeque},
+    future::Future,
+    net::SocketAddrV4,
+};
 
 use iroh_base::EndpointId;
 use n0_error::{Result, StackResultExt};
-use n0_future::{FuturesUnordered, StreamExt, stream};
+use n0_future::{FuturesUnordered, Stream, StreamExt, stream};
 use n0_mainline::{Dht, Id};
 use tokio::task::JoinSet;
 
-use crate::AddrIndex;
+use crate::{AddrIndex, AddrIndexError, SignedRecord};
 use tracing::debug;
 
 const MAX_INDEX_LOOKUPS: usize = 16;
@@ -55,52 +59,19 @@ impl Resolver {
     pub fn resolve_stream(&self, infohash: Id) -> stream::Boxed<EndpointId> {
         let dht = self.dht.clone();
         let index = self.index.clone();
-        let stream = async_stream::stream! {
-            debug!(%infohash, "starting Mainline provider stream");
-            let mut peers = match dht.get_peers(infohash).await {
-                Ok(peers) => peers,
-                Err(err) => {
-                    debug!(%infohash, %err, "Mainline lookup could not start");
-                    return;
-                }
-            };
-            let mut pending_peers = VecDeque::new();
-            let mut lookups = FuturesUnordered::new();
-            let mut peers_done = false;
-            loop {
-                while lookups.len() < MAX_INDEX_LOOKUPS {
-                    let Some(peer) = pending_peers.pop_front() else { break };
-                    let index = index.clone();
-                    lookups.push(async move { (peer, index.lookup(peer).await) });
-                }
-                if peers_done && pending_peers.is_empty() && lookups.is_empty() {
-                    break;
-                }
-                let poll_peers = !peers_done && pending_peers.len() < MAX_QUEUED_PEERS;
-                let poll_lookups = !lookups.is_empty();
-                tokio::select! {
-                    batch = peers.next(), if poll_peers => match batch {
-                        Some(batch) => {
-                            debug!(%infohash, count = batch.len(), "Mainline peers received");
-                            pending_peers.extend(batch);
-                        },
-                        None => peers_done = true,
-                    },
-                    result = lookups.next(), if poll_lookups => {
-                        if let Some((peer, result)) = result {
-                            match result {
-                                Ok(records) => for record in records {
-                                    debug!(%infohash, %peer, endpoint = %record.endpoint_id, "discovered content provider");
-                                    yield record.endpoint_id;
-                                },
-                                Err(err) => debug!(%peer, %err, "index resolve"),
-                            }
-                        }
-                    }
-                }
-            }
-        };
-        stream.boxed()
+        providers(
+            async move {
+                debug!(%infohash, "starting Mainline provider stream");
+                dht.get_peers(infohash)
+                    .await
+                    .inspect_err(|err| debug!(%infohash, %err, "Mainline lookup could not start"))
+                    .ok()
+            },
+            move |peer| {
+                let index = index.clone();
+                async move { index.lookup(peer).await }
+            },
+        )
     }
 
     /// Keeps looking for providers until the consumer drops the stream.
@@ -174,13 +145,137 @@ impl Resolver {
     }
 }
 
+/// Yields the endpoints that `lookup` finds for the peers `peers` yields, as
+/// [`Resolver::resolve_stream`] describes. `peers` runs on the first poll and
+/// gives `None` when the lookup cannot start.
+fn providers<P, S, L, F>(peers: P, lookup: L) -> stream::Boxed<EndpointId>
+where
+    P: Future<Output = Option<S>> + Send + 'static,
+    S: Stream<Item = Vec<SocketAddrV4>> + Send + Unpin + 'static,
+    L: Fn(SocketAddrV4) -> F + Send + 'static,
+    F: Future<Output = Result<Vec<SignedRecord>, AddrIndexError>> + Send + 'static,
+{
+    let stream = async_stream::stream! {
+        let Some(mut peers) = peers.await else { return };
+        let mut pending_peers = VecDeque::new();
+        let mut lookups = FuturesUnordered::new();
+        let mut peers_done = false;
+        loop {
+            while lookups.len() < MAX_INDEX_LOOKUPS {
+                let Some(peer) = pending_peers.pop_front() else { break };
+                let lookup = lookup(peer);
+                lookups.push(async move { (peer, lookup.await) });
+            }
+            if peers_done && pending_peers.is_empty() && lookups.is_empty() {
+                break;
+            }
+            let poll_peers = !peers_done && pending_peers.len() < MAX_QUEUED_PEERS;
+            let poll_lookups = !lookups.is_empty();
+            tokio::select! {
+                batch = peers.next(), if poll_peers => match batch {
+                    Some(batch) => {
+                        debug!(count = batch.len(), "Mainline peers received");
+                        pending_peers.extend(batch);
+                    },
+                    None => peers_done = true,
+                },
+                result = lookups.next(), if poll_lookups => {
+                    if let Some((peer, result)) = result {
+                        match result {
+                            Ok(records) => for record in records {
+                                debug!(%peer, endpoint = %record.endpoint_id, "discovered content provider");
+                                yield record.endpoint_id;
+                            },
+                            Err(err) => debug!(%peer, %err, "index resolve"),
+                        }
+                    }
+                }
+            }
+        }
+    };
+    stream.boxed()
+}
+
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{
+        net::Ipv4Addr,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
     use iroh_base::SecretKey;
 
     use super::*;
+
+    /// Counts the index lookups of a provider stream, and how many ran at once.
+    #[derive(Default)]
+    struct Lookups {
+        started: AtomicUsize,
+        running: AtomicUsize,
+        most: AtomicUsize,
+    }
+
+    /// Feeds `peers` in batches of `batch` to a provider stream whose lookups
+    /// all find a record after a moment, and reads up to `prefix` endpoints.
+    /// Returns the lookups, how many batches the stream took, and the endpoints.
+    async fn read_prefix(
+        peers: usize,
+        batch: usize,
+        prefix: usize,
+    ) -> (Arc<Lookups>, usize, usize) {
+        let peers: Vec<_> = (0..peers)
+            .map(|port| SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 7), port as u16))
+            .collect();
+        let taken = Arc::new(AtomicUsize::new(0));
+        let batches = {
+            let taken = taken.clone();
+            stream::iter(peers.chunks(batch).map(<[_]>::to_vec).collect::<Vec<_>>()).inspect(
+                move |_| {
+                    taken.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+        };
+        let lookups = Arc::new(Lookups::default());
+        let secret = SecretKey::generate();
+        let counted = lookups.clone();
+        let found = providers(async move { Some(batches) }, move |peer| {
+            counted.started.fetch_add(1, Ordering::SeqCst);
+            let running = counted.running.fetch_add(1, Ordering::SeqCst) + 1;
+            counted.most.fetch_max(running, Ordering::SeqCst);
+            let counted = counted.clone();
+            let record = SignedRecord::sign(&secret, peer);
+            async move {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                counted.running.fetch_sub(1, Ordering::SeqCst);
+                Ok(vec![record])
+            }
+        })
+        .take(prefix)
+        .collect::<Vec<_>>()
+        .await;
+        (lookups, taken.load(Ordering::SeqCst), found.len())
+    }
+
+    /// Reading a prefix costs the same, however many providers there are.
+    #[tokio::test]
+    async fn a_prefix_takes_the_same_work_for_any_number_of_providers() {
+        for providers in [20, 200, 2000] {
+            // Mainline nodes answer up to 20 peers at a time.
+            let (lookups, batches, found) = read_prefix(providers, 20, 4).await;
+            assert_eq!(found, 4);
+            // The first 16 lookups, and one more after each of the first three results.
+            let started = lookups.started.load(Ordering::SeqCst);
+            assert!(started <= 19, "{providers} providers: {started} lookups");
+            assert!(lookups.most.load(Ordering::SeqCst) <= MAX_INDEX_LOOKUPS);
+            // A batch is taken only while fewer than 64 peers wait, so at most
+            // 19 looked up and 83 waiting, which is less than six batches.
+            assert!(batches <= 5, "{providers} providers: {batches} batches");
+        }
+    }
 
     #[tokio::test]
     async fn known_providers_chained_first_need_no_lookup() {
