@@ -52,6 +52,7 @@ iroh.workspace = true
 iroh-blobs.workspace = true
 iroh-gossip = "0.101"
 tempfile = "3"
+udp-addr-index = { version = "0.1.0", path = "../udp-addr-index" }
 tokio = { workspace = true, features = ["full", "test-util"] }
 tracing-subscriber.workspace = true
 
